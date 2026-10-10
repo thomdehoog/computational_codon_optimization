@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codonopt"
+version = "0.2.0"
+description = "Codon-optimize an open reading frame for synthesis success and expression"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Thom de Hoog" }]
+keywords = ["codon optimization", "gene synthesis", "molecular biology", "bioinformatics"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# MaxEntScan splice site scoring. Not on PyPI, so it is installed from source:
+#   pip install "git+https://github.com/kepbod/maxentpy.git"
+splice = ["maxentpy"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+codonopt = "codonopt.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
