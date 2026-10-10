@@ -1,8 +1,17 @@
 import { defineConfig } from "@playwright/test";
 
-// A port of this run's own, so a stale `codonopt gui` left running elsewhere
-// can never be adopted and tested in place of the current build.
-const PORT = Number(process.env.CODONOPT_PORT ?? 8700 + (process.pid % 900));
+// A port of this checkout's own, so a stale `codonopt gui` left running
+// elsewhere can never be adopted and tested in place of the current build.
+//
+// This config is loaded again in every worker process, so the port has to come
+// from something they all agree on: the working directory, never the pid.
+function portFor(key: string): number {
+  let hash = 2166136261;
+  for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return 8700 + (Math.abs(hash) % 900);
+}
+
+const PORT = Number(process.env.CODONOPT_PORT ?? portFor(process.cwd()));
 
 export default defineConfig({
   testDir: "tests",
