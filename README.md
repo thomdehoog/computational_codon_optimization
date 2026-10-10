@@ -38,6 +38,18 @@ Splice acceptor sites              1           0
 
 `--json FILE` writes the same numbers, the per-term score and the sequence.
 
+## Interface
+
+```bash
+pip install -e .            # add ".[gui]" for a native window (pywebview)
+codonopt gui                # or: python -m codonopt gui
+```
+
+Paste a protein or DNA sequence, choose a host table and what to keep out, and press Optimize. You get the
+sequence with changed codons highlighted, a before/after table, a GC plot and the score breakdown, plus
+copy and download buttons. It runs locally (loopback only, token-protected), needs no Node, and without
+pywebview it opens in your browser. Add `--no-window --no-browser` to just serve it.
+
 ## What it optimizes
 
 | Criterion | Why | Default |
@@ -119,6 +131,16 @@ benchmark are in [`legacy/README.md`](legacy/README.md).
 ```bash
 pip install -e ".[dev]"
 pytest
+```
+
+The interface is written in TypeScript in `web/` and compiled to plain HTML, CSS and JS in
+`src/codonopt/web/`, which is committed so the Python side never needs Node:
+
+```bash
+cd web && npm install
+npm run build      # regenerate src/codonopt/web
+npm run check      # type-check and fail if the committed build is stale
+npm test           # Playwright end-to-end tests against the real Python server
 ```
 
 ## Limitations

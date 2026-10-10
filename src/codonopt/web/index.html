@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="codonopt-token" content="__CODONOPT_TOKEN__">
+  <title>codonopt</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect class="logo-bg" width="32" height="32" rx="8"/>
+        <path class="logo-strand" d="M9 6c0 7 14 7 14 14s-14 7-14 6M23 6c0 7-14 7-14 14"/>
+      </svg>
+      <div>
+        <h1>codonopt</h1>
+        <p>Codon optimization for synthesis and expression</p>
+      </div>
+    </div>
+    <span class="version" id="version"></span>
+  </header>
+
+  <main class="app">
+    <form id="form" class="panel" autocomplete="off" novalidate>
+      <div class="panel-scroll">
+
+        <section class="group" aria-labelledby="h-sequence">
+          <div class="group-head">
+            <h2 id="h-sequence">Sequence</h2>
+            <div class="tools">
+              <button type="button" class="link" id="btn-example">Load example</button>
+              <button type="button" class="link" id="btn-open">Open file</button>
+              <button type="button" class="link" id="btn-clear">Clear</button>
+            </div>
+          </div>
+          <label class="sr-only" for="sequence">Protein or DNA sequence</label>
+          <textarea id="sequence" spellcheck="false" rows="7"
+            placeholder="Paste a protein, or a coding DNA sequence to improve. Plain text or one FASTA record."></textarea>
+          <input type="file" id="file-input" accept=".fa,.fasta,.faa,.fna,.fas,.txt,text/plain" hidden>
+          <p id="detected" class="detected" role="status">Nothing pasted yet.</p>
+          <div class="row">
+            <fieldset class="seg" aria-label="Sequence type">
+              <input type="radio" name="kind" id="kind-auto" value="auto" checked>
+              <label for="kind-auto">Auto</label>
+              <input type="radio" name="kind" id="kind-protein" value="protein">
+              <label for="kind-protein">Protein</label>
+              <input type="radio" name="kind" id="kind-dna" value="dna">
+              <label for="kind-dna">DNA</label>
+            </fieldset>
+            <label class="check" id="add-stop-wrap">
+              <input type="checkbox" id="add-stop" checked> Add stop codon
+            </label>
+          </div>
+        </section>
+
+        <section class="group" aria-labelledby="h-host">
+          <h2 id="h-host">Host</h2>
+          <label class="field">
+            <span>Codon usage</span>
+            <select id="table"></select>
+          </label>
+          <p class="hint" id="table-hint"></p>
+          <div id="custom-table" hidden>
+            <div class="group-head">
+              <label for="table-text" class="small-label">Codon table (JSON, CSV or TSV)</label>
+              <button type="button" class="link" id="btn-open-table">Open file</button>
+            </div>
+            <textarea id="table-text" spellcheck="false" rows="5"
+              placeholder='{"CTG": 0.40, "CTC": 0.20, "TTA": 0.07}  or  one "codon,value" per line'></textarea>
+            <input type="file" id="table-file" accept=".json,.csv,.tsv,text/plain" hidden>
+            <p class="hint">Counts or frequencies per codon. Codons you leave out are never used.</p>
+          </div>
+        </section>
+
+        <section class="group" aria-labelledby="h-avoid">
+          <h2 id="h-avoid">Keep out</h2>
+          <div id="avoid-groups" class="chips"></div>
+          <label class="field">
+            <span>Other sites or patterns</span>
+            <input type="text" id="avoid-extra" spellcheck="false"
+              placeholder="NotI, AATAAA, GGWCC, mysite=GAATTC">
+          </label>
+          <p class="hint">Enzyme names or IUPAC patterns, comma separated. Both strands are checked.</p>
+        </section>
+
+        <section class="group" aria-labelledby="h-targets">
+          <h2 id="h-targets">Targets</h2>
+          <div class="grid3">
+            <label class="field">
+              <span>GC target</span>
+              <input type="number" id="gc-target" min="0" max="1" step="0.01" inputmode="decimal">
+            </label>
+            <label class="field">
+              <span>Window min</span>
+              <input type="number" id="gc-low" min="0" max="1" step="0.01" inputmode="decimal">
+            </label>
+            <label class="field">
+              <span>Window max</span>
+              <input type="number" id="gc-high" min="0" max="1" step="0.01" inputmode="decimal">
+            </label>
+          </div>
+          <p class="hint">GC as a fraction between 0 and 1. Every 30 base window is kept inside the min–max range.</p>
+          <div class="grid3">
+            <label class="field">
+              <span>Longest run</span>
+              <input type="number" id="max-homopolymer" min="2" max="30" step="1" inputmode="numeric">
+            </label>
+            <label class="field wide">
+              <span>Splice-site scoring</span>
+              <select id="splice"></select>
+            </label>
+          </div>
+          <p class="hint" id="splice-hint"></p>
+        </section>
+
+        <section class="group" aria-labelledby="h-effort">
+          <h2 id="h-effort">Search</h2>
+          <fieldset class="seg" aria-label="Search effort">
+            <input type="radio" name="effort" id="effort-quick" value="quick">
+            <label for="effort-quick">Quick</label>
+            <input type="radio" name="effort" id="effort-standard" value="standard" checked>
+            <label for="effort-standard">Standard</label>
+            <input type="radio" name="effort" id="effort-thorough" value="thorough">
+            <label for="effort-thorough">Thorough</label>
+          </fieldset>
+          <p class="hint" id="effort-hint"></p>
+          <div class="grid3">
+            <label class="field">
+              <span>Time limit (s)</span>
+              <input type="number" id="seconds" min="1" step="1" inputmode="numeric">
+            </label>
+            <label class="field">
+              <span>Seed</span>
+              <input type="number" id="seed" min="0" step="1" inputmode="numeric" placeholder="random">
+            </label>
+          </div>
+        </section>
+
+        <details class="group advanced">
+          <summary><h2>Advanced</h2></summary>
+          <p class="hint">Each term of the score has a weight. Zero switches a term off.</p>
+          <div id="weights" class="weights"></div>
+          <div class="grid3">
+            <label class="field"><span>GC window</span>
+              <input type="number" id="gc-window" min="6" max="300" step="1" inputmode="numeric"></label>
+            <label class="field"><span>GC step</span>
+              <input type="number" id="gc-step" min="1" max="300" step="1" inputmode="numeric"></label>
+            <label class="field"><span>Repeat length</span>
+              <input type="number" id="repeat-k" min="4" max="60" step="1" inputmode="numeric"></label>
+            <label class="field"><span>Hairpin stem</span>
+              <input type="number" id="hairpin-stem" min="4" max="40" step="1" inputmode="numeric"></label>
+            <label class="field"><span>Loop min</span>
+              <input type="number" id="hairpin-min-loop" min="0" max="100" step="1" inputmode="numeric"></label>
+            <label class="field"><span>Loop max</span>
+              <input type="number" id="hairpin-max-loop" min="0" max="300" step="1" inputmode="numeric"></label>
+          </div>
+          <button type="button" class="link" id="btn-reset">Reset all settings</button>
+        </details>
+
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="primary" id="run" disabled>Optimize</button>
+        <button type="button" class="secondary" id="cancel" hidden>Stop</button>
+      </div>
+    </form>
+
+    <section id="output" class="output" aria-label="Results" aria-live="polite" tabindex="-1">
+      <div class="empty" id="empty">
+        <h2>Design a sequence that is easy to make</h2>
+        <p>The protein stays exactly the same. Only the synonymous codons change, so the DNA
+          avoids what makes genes hard to synthesise and express.</p>
+        <ol class="steps">
+          <li><strong>Paste</strong> a protein, or a DNA sequence you want to improve.</li>
+          <li><strong>Choose</strong> a host and the sites to keep out.</li>
+          <li><strong>Optimize</strong>, then compare before and after.</li>
+        </ol>
+        <p class="hint">Nothing leaves this computer: the page talks only to the local codonopt process.</p>
+      </div>
+    </section>
+  </main>
+
+  <noscript><p class="noscript">codonopt needs JavaScript to run.</p></noscript>
+</body>
+</html>

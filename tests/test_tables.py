@@ -114,3 +114,29 @@ def test_load_table_rejects_unusable_files(tmp_path):
     malformed.write_text("TTT,abc\n")
     with pytest.raises(ValueError, match="not a number"):
         load_table(malformed)
+
+
+def test_table_from_text_matches_load_table(tmp_path):
+    from codonopt.tables import table_from_text
+
+    text = "codon,count\nTTT,1\nTTC,3\n"
+    path = tmp_path / "usage.csv"
+    path.write_text(text)
+    from_text = table_from_text(text, "csv", name="usage")
+    from_file = load_table(path)
+    assert from_text.frequencies == from_file.frequencies
+    assert table_from_text("TTT\t1\nTTC\t3\n", ".tsv", name="t").frequency("TTC") == 0.75
+    assert table_from_text('{"TTT": 1, "TTC": 3}', "json", name="j").frequency("TTC") == 0.75
+
+
+def test_table_from_text_errors_name_their_source():
+    from codonopt.tables import table_from_text
+
+    with pytest.raises(ValueError, match="pasted:2: 'x' is not a number"):
+        table_from_text("TTT,1\nTTC,x\n", "csv", name="n", source="pasted")
+    with pytest.raises(ValueError, match="pasted: every JSON value must be a number"):
+        table_from_text('{"TTT": "high"}', "json", name="n", source="pasted")
+    with pytest.raises(ValueError, match="pasted: expected a JSON object"):
+        table_from_text("[1, 2]", "json", name="n", source="pasted")
+    with pytest.raises(ValueError, match="expected a .json, .csv or .tsv"):
+        table_from_text("TTT 1", "txt", name="n", source="pasted")

@@ -6,3 +6,8 @@ dist/
 .pytest_cache/
 .venv/
 venv/
+
+# web interface tooling
+web/node_modules/
+web/test-results/
+web/playwright-report/

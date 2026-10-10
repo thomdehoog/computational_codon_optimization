@@ -2,6 +2,7 @@
 
     codonopt optimize --protein-fasta gene.faa --table human --out gene.fna
     codonopt report --dna-fasta gene.fna
+    codonopt gui
     codonopt tables
     codonopt motifs
 """
@@ -70,6 +71,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", metavar="PATH", help="write the measurements here as JSON"
     )
     report_parser.set_defaults(handler=_run_report)
+
+    gui_parser = subparsers.add_parser(
+        "gui",
+        help="open the graphical interface (a native window with pywebview, "
+        "otherwise your browser)",
+    )
+    gui_parser.add_argument(
+        "--port", type=int, default=0, metavar="N", help="port to listen on (default: any free one)"
+    )
+    gui_parser.add_argument(
+        "--no-window",
+        action="store_true",
+        help="serve the interface without opening a native window",
+    )
+    gui_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="do not open the default browser (use with --no-window)",
+    )
+    gui_parser.add_argument(
+        "--verbose", action="store_true", help="log each request to stderr"
+    )
+    gui_parser.set_defaults(handler=_run_gui)
 
     tables_parser = subparsers.add_parser("tables", help="list codon usage tables")
     tables_parser.set_defaults(handler=_run_tables)
@@ -386,6 +410,17 @@ def _run_report(args: argparse.Namespace) -> int:
             value = ", ".join(str(item) for item in value) or "-"
         print(f"  {key:<{width}}  {value}")
     return 0
+
+
+def _run_gui(args: argparse.Namespace) -> int:
+    from .server import run_gui
+
+    return run_gui(
+        args.port,
+        window=not args.no_window,
+        open_browser=not args.no_browser,
+        verbose=args.verbose,
+    )
 
 
 def _run_tables(args: argparse.Namespace) -> int:

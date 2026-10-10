@@ -61,6 +61,7 @@ class OptimizationResult:
         restarts_run: Restarts actually run before the time budget ran out.
         elapsed: Wall-clock seconds spent.
         hit_time_limit: True if the time budget stopped the search early.
+        cancelled: True if ``should_stop`` stopped the search early.
     """
 
     sequence: str
@@ -76,6 +77,7 @@ class OptimizationResult:
     restarts_run: int = 0
     elapsed: float = 0.0
     hit_time_limit: bool = False
+    cancelled: bool = False
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -148,6 +150,13 @@ def optimize(
     deadline = (
         started + settings.max_seconds if settings.max_seconds is not None else None
     )
+    should_stop: Callable[[], bool] | None = settings.should_stop  # type: ignore[assignment]
+
+    def expired() -> bool:
+        """True once the time budget is spent or the caller asked to stop."""
+        if should_stop is not None and should_stop():
+            return True
+        return deadline is not None and time.perf_counter() >= deadline
 
     best: SequenceState | None = None
     best_initial: tuple[str, float] | None = None
@@ -155,7 +164,7 @@ def optimize(
     hit_limit = False
 
     for restart in range(settings.restarts):
-        if deadline is not None and time.perf_counter() >= deadline and best is not None:
+        if best is not None and expired():
             hit_limit = True
             break
         seed = (
@@ -172,7 +181,7 @@ def optimize(
         )
 
         local_sweeps, local_evaluated, local_accepted, stopped = _greedy(
-            state, rng, settings, deadline
+            state, rng, settings, expired
         )
         sweeps += local_sweeps
         evaluated += local_evaluated
@@ -181,7 +190,7 @@ def optimize(
 
         if settings.anneal_steps and not stopped:
             annealed, anneal_evaluated, anneal_accepted, stopped = _anneal(
-                state, rng, settings, deadline
+                state, rng, settings, expired
             )
             evaluated += anneal_evaluated
             accepted += anneal_accepted
@@ -201,6 +210,7 @@ def optimize(
     if translate(best.sequence) != protein:  # pragma: no cover - safety net
         raise AssertionError("optimizer changed the encoded protein")
 
+    cancelled = bool(hit_limit and should_stop is not None and should_stop())
     initial_state = SequenceState(best_initial[0], config)
     return OptimizationResult(
         sequence=best.sequence,
@@ -215,7 +225,8 @@ def optimize(
         moves_accepted=accepted,
         restarts_run=restarts_run,
         elapsed=time.perf_counter() - started,
-        hit_time_limit=hit_limit,
+        hit_time_limit=hit_limit and not cancelled,
+        cancelled=cancelled,
     )
 
 
@@ -235,7 +246,7 @@ def _greedy(
     state: SequenceState,
     rng: random.Random,
     settings: OptimizerSettings,
-    deadline: float | None,
+    expired: Callable[[], bool],
 ) -> tuple[int, int, int, bool]:
     """Run greedy sweeps until nothing improves. Returns counters."""
     order = list(range(state.codon_count))
@@ -245,9 +256,8 @@ def _greedy(
         sweeps += 1
         improved = 0
         for counter, position in enumerate(order):
-            if deadline is not None and not counter % 64:
-                if time.perf_counter() >= deadline:
-                    return sweeps, evaluated, accepted, True
+            if not counter % 64 and expired():
+                return sweeps, evaluated, accepted, True
             options = state.alternatives(position)
             if len(options) == 1:
                 continue
@@ -274,7 +284,7 @@ def _anneal(
     state: SequenceState,
     rng: random.Random,
     settings: OptimizerSettings,
-    deadline: float | None,
+    expired: Callable[[], bool],
 ) -> tuple[SequenceState | None, int, int, bool]:
     """Run simulated annealing, returning the best state seen.
 
@@ -299,7 +309,7 @@ def _anneal(
     stopped = False
 
     for step in range(steps):
-        if deadline is not None and not step % 256 and time.perf_counter() >= deadline:
+        if not step % 256 and expired():
             stopped = True
             break
         position = rng.choice(positions)

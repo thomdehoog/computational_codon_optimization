@@ -153,3 +153,17 @@ def test_find_hairpins_respects_the_limit():
     unit = "ACGTTGCACC"
     sequence = (unit + "TTTTT" + reverse_complement(unit) + "AAA") * 6
     assert len(find_hairpins(sequence, stem=10, min_loop=3, max_loop=20, limit=3)) == 3
+
+
+def test_gc_profile_matches_the_windows_that_are_scored():
+    from codonopt.metrics import gc_profile
+
+    sequence = "A" * 30 + "G" * 30
+    profile = gc_profile(sequence, window=30, step=15)
+    assert [start for start, _ in profile] == [0, 15, 30]
+    assert [round(value, 3) for _, value in profile] == [0.0, 0.5, 1.0]
+    report = gc_window_report(sequence, window=30, step=15, target_range=(0.4, 0.6))
+    assert report.windows == len(profile)
+    assert report.min_fraction == min(value for _, value in profile)
+    assert report.max_fraction == max(value for _, value in profile)
+    assert gc_profile("") == []

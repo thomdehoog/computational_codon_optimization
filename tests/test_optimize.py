@@ -179,3 +179,44 @@ def test_single_residue_protein_is_handled(config):
     result = optimize("M", config, OptimizerSettings(seed=20))
     assert result.sequence == "ATG"
     assert result.score == pytest.approx(result.initial_score)
+
+
+def test_should_stop_cancels_cleanly_and_keeps_the_protein(config):
+    protein = random_protein(200, seed=60)
+    settings = OptimizerSettings(
+        seed=21, max_sweeps=50, restarts=5, should_stop=lambda: True
+    )
+    result = optimize(protein, config, settings)
+    assert result.cancelled is True
+    assert result.hit_time_limit is False
+    assert translate(result.sequence) == protein
+    assert result.restarts_run == 1  # the first restart always produces a result
+
+
+def test_should_stop_can_flip_part_way_through(plain_config):
+    protein = random_protein(300, seed=61)
+    calls = {"n": 0}
+
+    def stop_after_a_while() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 12
+
+    full = optimize(protein, plain_config, OptimizerSettings(seed=22, max_sweeps=6))
+    cut = optimize(
+        protein,
+        plain_config,
+        OptimizerSettings(seed=22, max_sweeps=6, should_stop=stop_after_a_while),
+    )
+    assert cut.cancelled
+    assert cut.moves_evaluated < full.moves_evaluated
+    assert cut.score <= cut.initial_score  # whatever it got to is no worse
+
+
+def test_a_run_that_is_not_stopped_is_not_marked_cancelled(config):
+    result = optimize(
+        random_protein(30, seed=62),
+        config,
+        OptimizerSettings(seed=23, max_sweeps=2, should_stop=lambda: False),
+    )
+    assert result.cancelled is False
+    assert result.hit_time_limit is False

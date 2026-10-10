@@ -1,0 +1,18 @@
+{
+  "name": "codonopt-web",
+  "private": true,
+  "type": "module",
+  "description": "Source of the codonopt web interface. Builds to plain HTML, CSS and JS in ../src/codonopt/web, which is committed, so using the interface never needs Node.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "check": "tsc --noEmit && node build.mjs --check",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.0"
+  }
+}

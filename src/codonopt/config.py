@@ -149,6 +149,9 @@ class OptimizerSettings:
             codons by host frequency, ``"best"`` takes the most frequent codon
             everywhere, ``"random"`` samples uniformly.
         progress: Called with a short status line after each phase.
+        should_stop: Called regularly during the search; once it returns True
+            the search stops cleanly and returns the best sequence found so
+            far, which is how a caller cancels a long run.
     """
 
     restarts: int = 1
@@ -160,6 +163,7 @@ class OptimizerSettings:
     seed: int | None = None
     seed_mode: str = "weighted"
     progress: object | None = None
+    should_stop: object | None = None
 
     def __post_init__(self) -> None:
         if self.restarts < 1:

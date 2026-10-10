@@ -16,6 +16,7 @@ expression host with :func:`load_table`.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 import random
@@ -24,7 +25,14 @@ from pathlib import Path
 
 from .sequence import AA_TO_CODONS, CODON_TO_AA, STOP, split_codons
 
-__all__ = ["CodonUsage", "TABLES", "get_table", "load_table", "available_tables"]
+__all__ = [
+    "CodonUsage",
+    "TABLES",
+    "available_tables",
+    "get_table",
+    "load_table",
+    "table_from_text",
+]
 
 # Approximate relative synonymous codon usage, Homo sapiens.
 _HUMAN: dict[str, float] = {
@@ -225,47 +233,78 @@ def get_table(name: str) -> CodonUsage:
 
 
 def load_table(path: str | Path, *, name: str | None = None) -> CodonUsage:
-    """Load a codon usage table from a JSON or CSV file.
+    """Load a codon usage table from a JSON, CSV or TSV file.
 
-    JSON files hold an object mapping codon to frequency or count. CSV files
-    hold two columns, codon and value, with an optional header row.
+    JSON files hold an object mapping codon to frequency or count. CSV and TSV
+    files hold two columns, codon and value, with an optional header row.
 
     Raises:
         ValueError: If the file extension is not ``.json``, ``.csv`` or
             ``.tsv``, or a row cannot be parsed.
     """
     path = Path(path)
-    suffix = path.suffix.lower()
-    if suffix == ".json":
-        payload = json.loads(path.read_text())
+    return table_from_text(
+        path.read_text(),
+        path.suffix,
+        name=name or path.stem,
+        source=str(path),
+    )
+
+
+def table_from_text(
+    text: str,
+    fmt: str,
+    *,
+    name: str,
+    source: str = "table",
+) -> CodonUsage:
+    """Build a codon usage table from the text of a JSON, CSV or TSV table.
+
+    Args:
+        text: The table contents.
+        fmt: ``"json"``, ``"csv"`` or ``"tsv"``, with or without a leading dot.
+        name: Name to give the table.
+        source: Where the text came from, used to prefix error messages.
+
+    Raises:
+        ValueError: If ``fmt`` is unsupported, a row cannot be parsed, or no
+            codon rows are found.
+    """
+    fmt = fmt.lower().lstrip(".")
+    if fmt == "json":
+        payload = json.loads(text)
         if not isinstance(payload, dict):
-            raise ValueError(f"{path}: expected a JSON object of codon -> value")
-        frequencies = {str(k): float(v) for k, v in payload.items()}
-    elif suffix in {".csv", ".tsv"}:
-        delimiter = "\t" if suffix == ".tsv" else ","
+            raise ValueError(f"{source}: expected a JSON object of codon -> value")
+        try:
+            frequencies = {str(k): float(v) for k, v in payload.items()}
+        except (TypeError, ValueError):
+            raise ValueError(f"{source}: every JSON value must be a number") from None
+    elif fmt in {"csv", "tsv"}:
+        delimiter = "\t" if fmt == "tsv" else ","
         frequencies = {}
-        with path.open(newline="") as handle:
-            for lineno, row in enumerate(csv.reader(handle, delimiter=delimiter), 1):
-                if not row or row[0].startswith("#"):
-                    continue
-                if len(row) < 2:
-                    raise ValueError(f"{path}:{lineno}: expected two columns")
-                codon = row[0].strip().upper().replace("U", "T")
-                if codon not in CODON_TO_AA:
-                    continue  # header or annotation row
-                try:
-                    frequencies[codon] = float(row[1])
-                except ValueError:
-                    raise ValueError(
-                        f"{path}:{lineno}: {row[1]!r} is not a number"
-                    ) from None
+        for lineno, row in enumerate(
+            csv.reader(io.StringIO(text, newline=""), delimiter=delimiter), 1
+        ):
+            if not row or row[0].startswith("#"):
+                continue
+            if len(row) < 2:
+                raise ValueError(f"{source}:{lineno}: expected two columns")
+            codon = row[0].strip().upper().replace("U", "T")
+            if codon not in CODON_TO_AA:
+                continue  # header or annotation row
+            try:
+                frequencies[codon] = float(row[1])
+            except ValueError:
+                raise ValueError(
+                    f"{source}:{lineno}: {row[1]!r} is not a number"
+                ) from None
     else:
-        raise ValueError(f"{path}: expected a .json, .csv or .tsv table")
+        raise ValueError(f"{source}: expected a .json, .csv or .tsv table")
 
     if not frequencies:
-        raise ValueError(f"{path}: no codon rows found")
+        raise ValueError(f"{source}: no codon rows found")
     return CodonUsage.from_frequencies(
-        name or path.stem,
+        name,
         frequencies,
-        description=f"Loaded from {path}",
+        description=f"Loaded from {source}",
     )

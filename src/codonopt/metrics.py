@@ -19,6 +19,7 @@ __all__ = [
     "HomopolymerRun",
     "RepeatReport",
     "Hairpin",
+    "gc_profile",
     "gc_window_report",
     "homopolymer_runs",
     "homopolymer_excess",
@@ -131,6 +132,24 @@ def gc_window_report(
         max_fraction=highest,
         worst_positions=tuple(worst),
     )
+
+
+def gc_profile(
+    sequence: str, *, window: int = 30, step: int = 3
+) -> list[tuple[int, float]]:
+    """Return ``(start, GC fraction)`` for every scored window.
+
+    The same windows :func:`gc_window_report` scores, so a plot of this profile
+    shows exactly what the penalty sees.
+    """
+    if not sequence:
+        return []
+    prefix = gc_prefix(sequence)
+    profile = []
+    for start in window_starts(len(sequence), window, step):
+        end = min(start + window, len(sequence))
+        profile.append((start, (prefix[end] - prefix[start]) / (end - start)))
+    return profile
 
 
 def _check_fraction_range(target_range: tuple[float, float]) -> tuple[float, float]:
