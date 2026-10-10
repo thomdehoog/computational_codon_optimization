@@ -1,17 +1,52 @@
-# computational_codon_optimization
+<h1 align="center">codonopt</h1>
 
-Rewrites the DNA of an open reading frame so it is easier to synthesise and
-express, without changing the protein it encodes.
+<p align="center">
+  <strong>Codon optimization for gene synthesis and expression.</strong><br>
+  Rewrite the DNA of an open reading frame so it is easier to make and express,<br>
+  without changing the protein it encodes.
+</p>
 
-Give it a protein (or an existing coding sequence) and it returns a synonymous
+<p align="center">
+  <a href="https://github.com/thomdehoog/computational_codon_optimization/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/thomdehoog/computational_codon_optimization/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776ab?logo=python&logoColor=white">
+  <img alt="Runtime dependencies: none" src="https://img.shields.io/badge/runtime%20dependencies-none-2ea44f">
+  <img alt="Interface: TypeScript" src="https://img.shields.io/badge/interface-TypeScript-3178c6?logo=typescript&logoColor=white">
+  <img alt="Tests: pytest and Playwright" src="https://img.shields.io/badge/tests-pytest%20%2B%20Playwright-0a9edc?logo=pytest&logoColor=white">
+  <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/license-GPLv3-blue"></a>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/interface-dark.png">
+    <img alt="The codonopt interface after optimizing a 120-residue protein: 16 issues down to 0, with the changed codons highlighted" src="docs/interface-light.png" width="920">
+  </picture>
+</p>
+
+Give it a protein, or an existing coding sequence, and it returns a synonymous
 sequence that balances GC content, repeats, hairpins, homopolymers, forbidden
-motifs, cryptic splice sites and host codon usage in a single score.
+motifs, cryptic splice sites and host codon usage in a single score. It is a
+pure-Python package with no runtime dependencies, a command line, a Python API
+and a local web interface.
+
+## Highlights
+
+- **One objective, not four passes.** Every concern is a weighted penalty in one score, so fixing one problem cannot silently undo another.
+- **Fast.** Scoring is incremental: a codon swap re-scores only what sits near it. An 800-residue protein takes 19 s, against 234 s for the scripts this replaces.
+- **The protein cannot change.** The only move is swapping a codon for a synonymous one, so correctness holds by construction, not by checking afterwards.
+- **Three ways in.** `codonopt` on the command line, a small Python API, and a browser or desktop interface.
+- **Checked against brute force.** The tests compare the incremental score with a from-scratch recomputation and with simple reference implementations.
 
 ## Quickstart
 
 ```bash
 pip install -e .
 
+codonopt gui        # the web interface (opens in your browser)
+```
+
+Or from the command line:
+
+```bash
 codonopt optimize --add-stop --avoid golden_gate,EcoRI --seed 5 --splice-backend motif \
     --protein MKWVTFISLLLLFSSAYSRGVFRRDTHKSEIAHRFKDLGEENFKALVLIAFAQYLQQCPF
 ```
@@ -38,17 +73,20 @@ Splice acceptor sites              1           0
 
 `--json FILE` writes the same numbers, the per-term score and the sequence.
 
-## Interface
+## Web interface
 
-```bash
-pip install -e .            # add ".[gui]" for a native window (pywebview)
-codonopt gui                # or: python -m codonopt gui
-```
+`codonopt gui` starts a local server and opens the interface in a native window
+if [pywebview](https://pywebview.flowrl.com/) is installed (`pip install -e ".[gui]"`),
+otherwise in your browser. Paste or open a protein or DNA sequence, pick a host
+table and what to keep out, and press **Optimize**. You get:
 
-Paste a protein or DNA sequence, choose a host table and what to keep out, and press Optimize. You get the
-sequence with changed codons highlighted, a before/after table, a GC plot and the score breakdown, plus
-copy and download buttons. It runs locally (loopback only, token-protected), needs no Node, and without
-pywebview it opens in your browser. Add `--no-window --no-browser` to just serve it.
+- the sequence with every changed codon highlighted, and the protein above it;
+- a before/after table, a GC plot along the sequence and the score breakdown;
+- copy and download for the DNA, FASTA and a report; runs can be cancelled and keep the best result so far.
+
+It is local only: the server binds to loopback, checks Host and Origin, requires
+a per-run token, sends a strict content security policy and never touches your
+files. Add `--no-window --no-browser` to just serve it.
 
 ## What it optimizes
 
@@ -63,10 +101,7 @@ pywebview it opens in your browser. Add `--no-window --no-browser` to just serve
 | Cryptic splice sites | Unwanted splicing of a transgene | MaxEntScan or a consensus screen |
 | Codon usage | Rare codons slow translation | host codon adaptation index |
 
-The protein cannot change: the only move the optimizer has is swapping a codon
-for a synonymous one.
-
-## Commands
+## Command line
 
 ```bash
 codonopt optimize --protein-fasta gene.faa --out gene.fna   # design from a protein
@@ -89,7 +124,7 @@ codonopt motifs                                             # known motifs and g
 `codonopt optimize --help` lists the rest. MaxEntScan is optional and not on
 PyPI: `pip install "git+https://github.com/kepbod/maxentpy.git"`.
 
-## Python
+## Python API
 
 ```python
 from codonopt import DesignConfig, OptimizerSettings, get_table, optimize, resolve_motifs
@@ -104,8 +139,8 @@ improves an existing sequence.
 
 ## How it works
 
-Each penalty term is tied to a position — a GC window, a homopolymer, a motif
-match, a splice window, a codon — so a codon swap only re-scores what sits near
+Each penalty term is tied to a position (a GC window, a homopolymer, a motif
+match, a splice window, a codon), so a codon swap only re-scores what sits near
 it. Repeats and hairpins are not local, so an incrementally updated k-mer index
 carries them. A candidate swap costs time proportional to the window sizes, not
 the sequence length.
@@ -115,6 +150,29 @@ followed by simulated annealing and several restarts.
 `SequenceState.audit()` recomputes a score from scratch; the tests check the
 incremental path against it and against brute-force implementations in
 `codonopt.metrics`.
+
+## Development
+
+The Python package needs nothing but Python. The interface is written in
+TypeScript in [`web/`](web/) and compiled with esbuild to plain HTML, CSS and
+JavaScript in `src/codonopt/web/`. That output is committed, so running the
+interface never needs Node; Node is only for working on it.
+
+```bash
+pip install -e ".[dev]" && pytest          # Python side
+
+cd web && npm install
+npm run build      # regenerate src/codonopt/web
+npm run check      # type-check, and fail if the committed build is stale
+npm test           # Playwright end-to-end tests against the real Python server
+```
+
+```
+src/codonopt/   optimizer, scoring, CLI and the local server (stdlib only)
+web/            TypeScript and CSS sources, build script, Playwright tests
+benchmarks/     reproducible performance comparison
+legacy/         the two original scripts this replaces, kept for reference
+```
 
 ## History
 
@@ -126,23 +184,6 @@ takes 19 s instead of 234 s and ends with a better codon adaptation index
 (0.90 vs 0.72) and no forbidden motifs (vs four). Details and a reproducible
 benchmark are in [`legacy/README.md`](legacy/README.md).
 
-## Development
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-The interface is written in TypeScript in `web/` and compiled to plain HTML, CSS and JS in
-`src/codonopt/web/`, which is committed so the Python side never needs Node:
-
-```bash
-cd web && npm install
-npm run build      # regenerate src/codonopt/web
-npm run check      # type-check and fail if the committed build is stale
-npm test           # Playwright end-to-end tests against the real Python server
-```
-
 ## Limitations
 
 - Hairpins are inverted repeats, not free-energy folds.
@@ -150,3 +191,7 @@ npm test           # Playwright end-to-end tests against the real Python server
   for production work. The consensus splice screen is a filter, not a model.
 - The search is local. A given `--seed` is reproducible, but another seed may do
   slightly better; use `--restarts` or `--anneal` when it counts.
+
+## License
+
+[GPL-3.0](LICENSE) © Thom de Hoog
