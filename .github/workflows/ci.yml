@@ -8,31 +8,54 @@ on:
 permissions:
   contents: read
 
+# A new push makes the previous run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     name: Python ${{ matrix.python }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: pytest -q
 
+  splice:
+    name: Python 3.12 with MaxEntScan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # The default splice backend prefers MaxEntScan when it is installed, so
+      # without this job that path is never exercised in CI.
+      - run: pip install -e ".[dev]" "git+https://github.com/kepbod/maxentpy.git"
+      - name: Confirm MaxEntScan really is in use
+        run: python -c "from codonopt.splice import maxent_available; assert maxent_available()"
+      - run: pytest -q
+
   web:
     name: Interface (type-check, build, end-to-end)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -50,3 +73,12 @@ jobs:
         working-directory: web
         env:
           CI: "true"
+      # Traces and screenshots, so a failure here can be read rather than guessed at.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7

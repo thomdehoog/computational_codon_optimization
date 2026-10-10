@@ -18,7 +18,12 @@ const DNA = new Set("ACGTU");
  * so the badge matches what will happen, but it only informs: the server stays
  * the authority and reports anything this misses.
  */
-export function describe(text: string, requested: Kind, maxResidues: number): Detection {
+export function describe(
+  text: string,
+  requested: Kind,
+  maxResidues: number,
+  addStop = false,
+): Detection {
   const trimmed = text.trim();
   if (!trimmed) return { state: "empty", message: "Nothing pasted yet.", kind: null, length: 0 };
 
@@ -46,6 +51,12 @@ export function describe(text: string, requested: Kind, maxResidues: number): De
       );
     }
     const codons = sequence.length / 3;
+    // The server translates first, so the limit is on codons, not bases.
+    if (codons > maxResidues) {
+      return error(
+        `DNA · ${codons.toLocaleString()} codons; this page takes up to ${maxResidues.toLocaleString()}.`,
+      );
+    }
     return ok("dna", sequence.length, `DNA · ${sequence.length.toLocaleString()} bases, ${codons} codons`);
   }
 
@@ -55,9 +66,12 @@ export function describe(text: string, requested: Kind, maxResidues: number): De
   if (stop !== -1 && stop !== sequence.length - 1) {
     return error(`Protein · stop symbol (*) at position ${stop + 1}, before the end.`);
   }
-  if (sequence.length > maxResidues) {
+  // A stop codon the server will append counts towards its limit too.
+  const residues = sequence.length + (addStop && !sequence.endsWith("*") ? 1 : 0);
+  if (residues > maxResidues) {
     return error(
-      `Protein · ${sequence.length.toLocaleString()} residues; this page takes up to ${maxResidues.toLocaleString()}.`,
+      `Protein · ${residues.toLocaleString()} residues${residues > sequence.length ? " with the stop codon" : ""}; ` +
+        `this page takes up to ${maxResidues.toLocaleString()}.`,
     );
   }
   const noun = sequence.length === 1 ? "residue" : "residues";

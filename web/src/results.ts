@@ -46,12 +46,22 @@ function action(label: string, onClick: (button: HTMLButtonElement) => void, pri
   return button;
 }
 
+const flashing = new WeakMap<HTMLButtonElement, number>();
+
+/** Briefly replace a button's label, surviving repeated clicks. */
 function flash(button: HTMLButtonElement, message: string): void {
-  const original = button.textContent;
+  const pending = flashing.get(button);
+  if (pending !== undefined) window.clearTimeout(pending);
+  // Capture the real label once; a second click must not capture "Copied".
+  if (button.dataset.label === undefined) button.dataset.label = button.textContent ?? "";
   button.textContent = message;
-  setTimeout(() => {
-    button.textContent = original;
-  }, 1600);
+  flashing.set(
+    button,
+    window.setTimeout(() => {
+      button.textContent = button.dataset.label ?? "";
+      flashing.delete(button);
+    }, 1600),
+  );
 }
 
 const safeName = (name: string): string => name.replace(/[^\w.-]+/g, "_") || "sequence";
@@ -77,9 +87,11 @@ export class Progress {
   private readonly elapsed = h("span", { class: "mono" });
   private readonly detail = h("span", { class: "hint" });
   private readonly log = h("ol", { class: "log mono", attrs: { "aria-label": "Search log" } });
+  private readonly trouble = h("p", { class: "note warn", role: "alert" });
   private lastLog = "";
 
   constructor(output: HTMLElement) {
+    this.trouble.hidden = true;
     replace(
       output,
       h(
@@ -89,21 +101,34 @@ export class Progress {
         h("p", { class: "hint", text: "Trying synonymous codons and keeping the changes that lower the score." }),
         h("div", { class: "bar", role: "progressbar", attrs: { "aria-label": "Optimization progress" } }, this.bar),
         h("div", { class: "progress-meta" }, this.elapsed, this.detail),
+        this.trouble,
         this.log,
       ),
     );
     output.focus({ preventScroll: true });
   }
 
+  /** Report something that went wrong without throwing the run's state away. */
+  note(message: string): void {
+    this.trouble.textContent = message;
+    this.trouble.hidden = false;
+  }
+
   update(job: Job): void {
     this.elapsed.textContent = `${fmt(job.elapsed, 1)} s of at most ${int(job.max_seconds)} s`;
+    const track = this.bar.parentElement;
     if (job.restarts_total > 1) {
-      this.detail.textContent = `Restart ${Math.min(job.restarts_done + 1, job.restarts_total)} of ${job.restarts_total}`;
-      this.bar.style.width = `${Math.min(100, (job.restarts_done / job.restarts_total) * 100)}%`;
-      this.bar.parentElement?.classList.remove("indeterminate");
+      const done = Math.min(job.restarts_done, job.restarts_total);
+      this.detail.textContent = `Restart ${Math.min(done + 1, job.restarts_total)} of ${job.restarts_total}`;
+      this.bar.style.width = `${(done / job.restarts_total) * 100}%`;
+      track?.classList.remove("indeterminate");
+      track?.setAttribute("aria-valuemin", "0");
+      track?.setAttribute("aria-valuemax", String(job.restarts_total));
+      track?.setAttribute("aria-valuenow", String(done));
     } else {
       this.detail.textContent = "Stops as soon as nothing improves.";
-      this.bar.parentElement?.classList.add("indeterminate");
+      track?.classList.add("indeterminate");
+      track?.removeAttribute("aria-valuenow");
     }
     const key = job.messages.join("\n");
     if (key !== this.lastLog) {

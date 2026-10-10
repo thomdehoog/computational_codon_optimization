@@ -103,6 +103,7 @@ h3 { font-size: 1rem; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow);
 }
+.panel[inert] { opacity: 0.55; }
 .panel-scroll { padding: 4px 18px 8px; min-height: 0; }
 .actions {
   position: sticky; bottom: 0; display: flex; gap: 8px; padding: 12px 18px;

@@ -156,8 +156,13 @@ def _number(
     label = label or key.replace("_", " ")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RequestError(f"{label} must be a number")
-    if not math.isfinite(value):
-        raise RequestError(f"{label} must be a finite number")
+    try:
+        # A JSON integer has no width limit, so this is where one too large for
+        # a float arrives; it is a bad request, not a server fault.
+        if not math.isfinite(value):
+            raise RequestError(f"{label} must be a finite number")
+    except OverflowError:
+        raise RequestError(f"{label} must be between {low:g} and {high:g}") from None
     if integer and int(value) != value:
         raise RequestError(f"{label} must be a whole number")
     if not low <= value <= high:
@@ -201,6 +206,10 @@ def _build_table(payload: dict):
         stripped = text.lstrip()
         fmt = "json" if stripped.startswith("{") else ("tsv" if "\t" in text else "csv")
         return table_from_text(text, fmt, name="custom", source="custom table")
+    if text is not None and "table" not in payload:
+        # A custom table was asked for and left blank. Falling back to a
+        # built-in host here would optimise against the wrong organism.
+        raise RequestError("The custom codon table is empty; paste one or choose a host.")
     name = payload.get("table", "human")
     if not isinstance(name, str):
         raise RequestError("table must be a name")
@@ -634,8 +643,10 @@ class _Handler(BaseHTTPRequestHandler):
                 HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "That request is too large."
             )
         try:
+            # ValueError also covers a number with more digits than int() will
+            # parse (CPython's 4300-digit limit).
             payload = json.loads(self.rfile.read(length) or b"null")
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, ValueError):
             return self._error(HTTPStatus.BAD_REQUEST, "The request is not valid JSON.")
         try:
             job = self.app.jobs.start(build_request(payload))

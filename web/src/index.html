@@ -26,7 +26,8 @@
   </header>
 
   <main class="app">
-    <form id="form" class="panel" autocomplete="off" novalidate>
+    <!-- inert until the defaults arrive, so nothing typed early is overwritten -->
+    <form id="form" class="panel" autocomplete="off" novalidate inert aria-busy="true">
       <div class="panel-scroll">
 
         <section class="group" aria-labelledby="h-sequence">
@@ -170,7 +171,10 @@
       </div>
     </form>
 
-    <section id="output" class="output" aria-label="Results" aria-live="polite" tabindex="-1">
+    <!-- A small status line is announced; the results region itself is not,
+         because it would be read out in full on every poll. -->
+    <p id="status" class="sr-only" role="status"></p>
+    <section id="output" class="output" aria-label="Results" tabindex="-1">
       <div class="empty" id="empty">
         <h2>Design a sequence that is easy to make</h2>
         <p>The protein stays exactly the same. Only the synonymous codons change, so the DNA

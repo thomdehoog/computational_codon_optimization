@@ -112,6 +112,18 @@ export function syncTable(): void {
   $("custom-table").hidden = !custom;
 }
 
+/**
+ * Why the form cannot be submitted as it stands, or null when it can.
+ *
+ * Only for what the server cannot see: an empty custom table reaches it as no
+ * table at all, and it would quietly fall back to the default host.
+ */
+export function problem(): string | null {
+  if ($<HTMLSelectElement>("table").value !== "custom") return null;
+  if ($<HTMLTextAreaElement>("table-text").value.trim()) return null;
+  return "Paste or open a codon usage table, or pick a built-in host instead of “Custom table…”.";
+}
+
 export function describeTable(meta: Meta): void {
   const name = $<HTMLSelectElement>("table").value;
   $("table-hint").textContent =

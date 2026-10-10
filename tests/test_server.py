@@ -364,6 +364,12 @@ def test_unknown_jobs_are_not_found(client):
         ({"sequence": "MKV", "seconds": 0}, "between 1 and"),
         ({"sequence": "MKV", "seconds": 10**6}, "between 1 and"),
         ({"sequence": "MKV", "seed": -1}, "between 0 and"),
+        # An integer too wide for a float used to escape as a 500.
+        ({"sequence": "MKV", "seconds": 10**400}, "between 1 and"),
+        ({"sequence": "MKV", "gc_target": -(10**400)}, "between 0 and"),
+        # "Custom table" with nothing in it must not fall back to another host.
+        ({"sequence": "MKV", "table_text": ""}, "custom codon table is empty"),
+        ({"sequence": "MKV", "table_text": "   "}, "custom codon table is empty"),
         ({"sequence": "MKV", "kind": "rna"}, "kind must be"),
         ({"sequence": "A" * (MAX_RESIDUES + 1), "kind": "protein"}, "accepts up to"),
     ],
@@ -378,6 +384,20 @@ def test_malformed_bodies(client):
     assert client.call("POST", "/api/jobs", raw=b"{not json")[0] == 400
     assert client.call("POST", "/api/jobs", raw=b"[1, 2]")[0] == 400
     assert client.call("POST", "/api/jobs", raw=b"\xff\xfe")[0] == 400
+    # More digits than CPython will parse into an int: a bad request, not a crash.
+    huge = b'{"sequence": "MKV", "seconds": ' + b"9" * 5000 + b"}"
+    status, _, body = client.call("POST", "/api/jobs", raw=huge)
+    assert status == 400
+    assert "not valid JSON" in body["error"]
+
+
+def test_an_explicit_table_still_wins_over_an_empty_custom_one(client):
+    """The page omits `table` for a custom table; other callers may send both."""
+    status, _, started = client.start(
+        {"sequence": "MKV", "table": "ecoli", "table_text": "", **FAST}
+    )
+    assert status == 202
+    assert client.wait(started["id"])["status"] == "done"
     status, _, body = client.call("POST", "/api/jobs", raw=b"null")
     assert status == 400
 

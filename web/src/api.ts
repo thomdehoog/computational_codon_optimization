@@ -52,7 +52,7 @@ export class Api {
     try {
       data = await response.json();
     } catch {
-      /* fall through to the status check */
+      /* fall through: a missing or malformed body is handled below */
     }
     if (!response.ok) {
       const message =
@@ -60,6 +60,14 @@ export class Api {
           ? String((data as { error: unknown }).error)
           : `The server answered ${response.status}.`;
       throw new ApiError(message, response.status);
+    }
+    // A 2xx with no usable body would otherwise hand callers `null` and fail
+    // later, somewhere that cannot explain itself.
+    if (data === null || typeof data !== "object") {
+      throw new ApiError(
+        `The server answered ${response.status} but sent no readable data.`,
+        response.status,
+      );
     }
     return data as T;
   }
