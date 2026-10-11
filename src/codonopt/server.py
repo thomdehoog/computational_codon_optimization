@@ -282,19 +282,33 @@ def build_request(payload: object) -> JobSpec:
             {"v": gc_range[1]}, "v", 0.70, low=0, high=1, label="GC range high"
         )
 
-        backend = payload.get("splice_backend", "auto")
+        table = _build_table(payload)
+        backend = payload.get("splice_backend", "none")
         if backend not in {"auto", "maxent", "motif", "none"}:
             raise RequestError("splice backend must be auto, maxent, motif or none")
         try:
-            scorer = get_scorer(backend)
+            scorer = get_scorer(backend, host=table.name)
         except RuntimeError as exc:
             raise RequestError(str(exc).splitlines()[0]) from None
 
         def whole(key: str, default: int, low: int, high: int) -> int:
             return _number(payload, key, default, low=low, high=high, integer=True)
 
+        def items(key: str, default: list, kind: type) -> tuple:
+            value = payload.get(key, default)
+            if not isinstance(value, list) or any(type(x) is not kind for x in value):
+                raise RequestError(f"{key} must be a list of {kind.__name__} values")
+            return tuple(value)
+
+        left_flank = payload.get("left_flank", "")
+        right_flank = payload.get("right_flank", "")
+        if not isinstance(left_flank, str) or not isinstance(right_flank, str):
+            raise RequestError("flanks must be DNA strings")
+        if len(left_flank) + len(sequence) + len(right_flank) > 3 * MAX_RESIDUES:
+            raise RequestError("the complete construct exceeds the interface length limit")
+
         config = DesignConfig(
-            table=_build_table(payload),
+            table=table,
             gc_target=_number(payload, "gc_target", 0.50, low=0, high=1),
             gc_range=(gc_low, gc_high),
             gc_window=whole("gc_window", 30, 6, 300),
@@ -311,6 +325,12 @@ def build_request(payload: object) -> JobSpec:
                 payload, "acceptor_cutoff", None, low=-100, high=100
             ),
             weights=_build_weights(payload.get("weights")),
+            required=items("required", ["motif"], str),
+            protected_codons=items("protected_codons", [], int),
+            excluded_codons=items("excluded_codons", [], str),
+            splice_strand=payload.get("splice_strand", "forward"),
+            left_flank=left_flank,
+            right_flank=right_flank,
         )
 
         effort = payload.get("effort", "standard")
@@ -446,13 +466,15 @@ def result_payload(result: OptimizationResult, spec: JobSpec) -> dict:
     config = spec.config
     payload = report_dict(result, config)
     profile_before = gc_profile(
-        result.initial_sequence, window=config.gc_window, step=config.gc_step
+        config.left_flank + result.initial_sequence + config.right_flank,
+        window=config.gc_window, step=config.gc_step
     )
     profile_after = gc_profile(
-        result.sequence, window=config.gc_window, step=config.gc_step
+        config.left_flank + result.sequence + config.right_flank,
+        window=config.gc_window, step=config.gc_step
     )
     lengths = {motif.name: motif.length for motif in config.motifs}
-    hits = motif_hits(result.sequence, list(config.motifs))
+    hits = motif_hits(config.left_flank + result.sequence + config.right_flank, list(config.motifs))
     payload.update(
         name=spec.name,
         kind=spec.kind,
@@ -464,6 +486,7 @@ def result_payload(result: OptimizationResult, spec: JobSpec) -> dict:
             "step": config.gc_step,
             "range": list(config.gc_range),
             "target": config.gc_target,
+            "coordinates": "construct",
             "starts": [start for start, _ in profile_after],
             "initial": [round(value, 4) for _, value in profile_before],
             "final": [round(value, 4) for _, value in profile_after],
@@ -477,7 +500,7 @@ def result_payload(result: OptimizationResult, spec: JobSpec) -> dict:
                 name=spec.name,
                 description=(
                     f"{spec.name} codonopt table={config.table.name} "
-                    f"score={result.score:.2f}"
+                    f"score={result.score:.2f} valid={str(result.valid).lower()}"
                 ),
                 sequence=result.sequence,
             )

@@ -10,6 +10,7 @@ two agree.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from bisect import bisect_left, bisect_right
 
 from .motifs import Motif
 from .sequence import gc_count, gc_prefix, reverse_complement
@@ -322,7 +323,7 @@ def count_hairpin_pairs(
             continue
         low = i + stem + min_loop
         high = i + stem + max_loop
-        pairs += sum(1 for j in candidates if low <= j <= high)
+        pairs += bisect_right(candidates, high) - bisect_left(candidates, low)
     return pairs
 
 
@@ -343,6 +344,8 @@ def find_hairpins(
     length for a fixed loop range.
     """
     _check_hairpin_params(stem, min_loop, max_loop)
+    if limit < 1:
+        raise ValueError("limit must be positive")
     index: dict[str, list[int]] = {}
     for i in range(len(sequence) - stem + 1):
         index.setdefault(sequence[i : i + stem], []).append(i)
@@ -351,7 +354,10 @@ def find_hairpins(
     hairpins: list[Hairpin] = []
     for i in range(len(sequence) - stem + 1):
         partner = reverse_complement(sequence[i : i + stem])
-        for j in index.get(partner, ()):  # j is the 3' arm start
+        candidates = index.get(partner, ())
+        first = bisect_left(candidates, i + stem + min_loop)
+        last = bisect_right(candidates, i + stem + max_loop)
+        for j in candidates[first:last]:  # j is the 3' arm start
             loop = j - (i + stem)
             if not (min_loop <= loop <= max_loop):
                 continue
@@ -384,9 +390,9 @@ def find_hairpins(
                     stem=sequence[left : left + length],
                 )
             )
-            if len(hairpins) >= limit:
+            if len(hairpins) > limit:
                 hairpins.sort(key=lambda h: (-h.stem_length, h.stem_start))
-                return hairpins
+                del hairpins[limit:]
     hairpins.sort(key=lambda h: (-h.stem_length, h.stem_start))
     return hairpins
 

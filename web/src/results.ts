@@ -98,7 +98,7 @@ export class Progress {
         "div",
         { class: "card progress" },
         h("h2", { text: "Optimizing" }),
-        h("p", { class: "hint", text: "Trying synonymous codons and keeping the changes that lower the score." }),
+        h("p", { class: "hint", text: "Resolving mandatory requirements, then improving synonymous codon choices." }),
         h("div", { class: "bar", role: "progressbar", attrs: { "aria-label": "Optimization progress" } }, this.bar),
         h("div", { class: "progress-meta" }, this.elapsed, this.detail),
         this.trouble,
@@ -292,7 +292,7 @@ function breakdown(result: Result): HTMLElement {
   const after = result.score.final_terms;
   const names = Object.keys(TERMS).filter((key) => (before[key] ?? 0) > 1e-9 || (after[key] ?? 0) > 1e-9);
   if (!names.length) {
-    return h("p", { class: "hint", text: "No penalties at all: every constraint is met and codon usage is ideal." });
+    return h("p", { class: "hint", text: "No active soft penalties. Mandatory requirements are checked separately." });
   }
   const scale = Math.max(...names.flatMap((key) => [before[key] ?? 0, after[key] ?? 0]), 1e-9);
   const bar = (value: number, className: string): HTMLElement => {
@@ -354,6 +354,11 @@ export function showResult(output: HTMLElement, result: Result, _meta: Meta): vo
     : result.search.hit_time_limit
       ? h("div", { class: "callout warn", role: "status" }, "The time limit ended the search before it settled. Raise the limit or use a thorough search for more.")
       : null;
+  const unresolved = result.valid ? null : h(
+    "div", { class: "callout warn", role: "alert" },
+    "Mandatory requirements remain unresolved. This candidate is not a valid design: " +
+    result.unresolved_constraints.map((v) => `${v.criterion} (${v.count})`).join(", ") + ".",
+  );
 
   const toolbar = h(
     "div",
@@ -371,10 +376,11 @@ export function showResult(output: HTMLElement, result: Result, _meta: Meta): vo
     h(
       "div",
       { class: "result-head" },
-      h("div", null, h("h2", { text: "Optimized sequence" }), h("p", { class: "hint", text: `${result.name} · ${result.protein.length.toLocaleString()} residues · ${result.codon_usage_table} codon usage` })),
+      h("div", null, h("h2", { text: result.valid ? "Optimized sequence" : "Unresolved candidate" }), h("p", { class: "hint", text: `${result.name} · ${result.protein.length.toLocaleString()} residues · ${result.codon_usage_table} codon usage` })),
       toolbar,
     ),
     banner,
+    unresolved,
     h(
       "div",
       { class: "stats" },
@@ -385,7 +391,7 @@ export function showResult(output: HTMLElement, result: Result, _meta: Meta): vo
     ),
     card("DNA sequence", "The protein is identical to your input; only synonymous codons changed.", sequenceView(result)),
     card("Before and after", null, comparison(result)),
-    card("GC content along the sequence", `Each point is a ${result.gc.window} base window.`, gcChart(result.gc, result.sequence.length)),
+    card("GC content along the construct", `Each point is a ${result.gc.window} base window, including any fixed flanks.`, gcChart(result.gc, result.context_sequence.length)),
     card("Where the score comes from", "Lower is better. Each term is weighted as in your settings.", breakdown(result)),
     h(
       "p",

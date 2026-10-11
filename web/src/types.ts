@@ -36,6 +36,8 @@ export interface Meta {
 }
 
 export interface Measures {
+  context_length: number;
+  cds_start: number;
   length: number;
   gc_fraction: number;
   gc_windows_below_range: number;
@@ -71,6 +73,10 @@ export interface MotifHit {
 }
 
 export interface Result {
+  context_sequence: string;
+  valid: boolean;
+  unresolved_constraints: { criterion: string; count: number }[];
+  stop_reason: string;
   name: string;
   kind: "protein" | "dna";
   protein: string;

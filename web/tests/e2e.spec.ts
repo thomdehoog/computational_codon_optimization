@@ -86,6 +86,20 @@ test("keeps the protein unchanged (the sequence is a synonymous recoding)", asyn
   expect(errors).toEqual([]);
 });
 
+test("labels an unavoidable motif as an unresolved candidate", async ({ page }) => {
+  const errors = await open(page);
+  await expect(page.locator("#splice")).toHaveValue("none");
+  await page.locator("#sequence").fill("MW");
+  await page.locator("#avoid-extra").fill("ATG");
+  await quick(page);
+  await page.locator("#run").click();
+  await expect(page.locator(".result-head h2")).toHaveText("Unresolved candidate", { timeout: 60_000 });
+  await expect(page.locator(".callout.warn[role=alert]")).toContainText("not a valid design");
+  await expect(page.locator("#status")).toContainText("unresolved mandatory requirements");
+  await expect(page.locator(".seq .line.dna")).toContainText("ATG");
+  expect(errors).toEqual([]);
+});
+
 test("explains problems instead of failing silently", async ({ page }) => {
   const errors = await open(page);
   await page.locator("#sequence").fill("MKT*AY1");

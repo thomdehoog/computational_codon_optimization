@@ -169,7 +169,7 @@ def maxent_available() -> bool:
     return True
 
 
-def get_scorer(backend: str) -> SpliceScorer | None:
+def get_scorer(backend: str, *, host: str | None = None) -> SpliceScorer | None:
     """Return a scorer for ``backend``.
 
     Args:
@@ -191,6 +191,10 @@ def get_scorer(backend: str) -> SpliceScorer | None:
     if key == "motif":
         return MotifScorer()
     if key == "auto":
+        # Automatic screening is only supported for the bundled human host.
+        # Other hosts can opt into a backend explicitly, with its limitations.
+        if host is not None and host.strip().lower() != "human":
+            return None
         return MaxEntScorer() if maxent_available() else MotifScorer()
     raise ValueError(
         f"unknown splice backend {backend!r}; expected maxent, motif, none or auto"

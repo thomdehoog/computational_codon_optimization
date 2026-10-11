@@ -195,9 +195,9 @@ def _add_constraint_arguments(
     )
     group.add_argument(
         "--splice-backend",
-        default="auto",
+        default="none",
         choices=("auto", "maxent", "motif", "none"),
-        help="cryptic splice site scoring (default: auto)",
+        help="candidate splice signal screening (default: none; auto is human-only)",
     )
     group.add_argument(
         "--donor-cutoff",
@@ -211,6 +211,17 @@ def _add_constraint_arguments(
         metavar="F",
         help="highest acceptable acceptor score (default: the backend's)",
     )
+    group.add_argument("--splice-strand", choices=("forward", "reverse", "both"), default="forward")
+    group.add_argument("--require", action="append", default=[],
+                       choices=("motif", "gc_window", "repeat", "hairpin", "homopolymer", "splice"),
+                       help="make a criterion mandatory; repeat to require several")
+    group.add_argument("--soft-motifs", action="store_true", help="treat avoided motifs as preferences instead of requirements")
+    group.add_argument("--left-flank", default="", help="immutable upstream DNA used when scoring the construct")
+    group.add_argument("--right-flank", default="", help="immutable downstream DNA used when scoring the construct")
+    group.add_argument("--protect-codon", type=int, action="append", default=[], metavar="INDEX",
+                       help="protect a zero-based codon index in starting DNA; repeat as needed")
+    group.add_argument("--exclude-codon", action="append", default=[], metavar="CODON",
+                       help="forbid a codon independently of its frequency")
     if weights:
         group.add_argument(
             "--weight",
@@ -250,6 +261,8 @@ def _add_search_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--seed-mode", default="weighted", choices=("weighted", "best", "random")
     )
+    group.add_argument("--repair-candidates", type=int, default=2000)
+    group.add_argument("--repair-max-codons", type=int, default=3, choices=(2, 3, 4))
 
 
 class _UsageError(Exception):
@@ -261,7 +274,7 @@ def _build_config(args: argparse.Namespace) -> DesignConfig:
         load_table(args.table_file) if args.table_file else get_table(args.table)
     )
     try:
-        scorer = get_scorer(args.splice_backend)
+        scorer = get_scorer(args.splice_backend, host=table.name)
     except RuntimeError as exc:
         raise _UsageError(str(exc)) from None
 
@@ -286,6 +299,12 @@ def _build_config(args: argparse.Namespace) -> DesignConfig:
         donor_cutoff=args.donor_cutoff,
         acceptor_cutoff=args.acceptor_cutoff,
         weights=_build_weights(getattr(args, "weight", [])),
+        required=tuple(args.require) + (() if args.soft_motifs else ("motif",)),
+        splice_strand=args.splice_strand,
+        left_flank=args.left_flank,
+        right_flank=args.right_flank,
+        protected_codons=tuple(args.protect_codon),
+        excluded_codons=tuple(args.exclude_codon),
     )
     return config
 
@@ -352,7 +371,11 @@ def _run_optimize(args: argparse.Namespace) -> int:
         protein = validate_protein(raw)
     if args.add_stop and not protein.endswith("*"):
         protein += "*"
-        start = None  # the starting sequence no longer matches the protein
+        if start is not None:
+            options = [c for c in config.table.codons("*") if c not in config.excluded_codons]
+            if not options:
+                raise _UsageError("all stop codons are excluded")
+            start += max(options, key=config.table.frequency)
 
     log = (lambda message: None) if args.quiet else _stderr
     settings = OptimizerSettings(
@@ -361,10 +384,12 @@ def _run_optimize(args: argparse.Namespace) -> int:
         anneal_steps=args.anneal,
         start_temperature=args.temp_start,
         end_temperature=args.temp_end,
-        max_seconds=None if args.seconds <= 0 else args.seconds,
+        max_seconds=None if args.seconds == 0 else args.seconds,
         seed=args.seed,
         seed_mode=args.seed_mode,
         progress=log,
+        repair_candidates=args.repair_candidates,
+        repair_max_codons=args.repair_max_codons,
     )
     if config.splice_scorer is not None and not args.quiet:
         log(f"splice backend: {config.splice_scorer.name}")
@@ -374,7 +399,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
     record = Record(
         name=args.name or name,
         description=(args.name or name)
-        + f" codonopt table={config.table.name} score={result.score:.2f}",
+            + f" codonopt table={config.table.name} score={result.score:.2f} valid={str(result.valid).lower()}",
         sequence=result.sequence,
     )
     text = format_fasta(record)
@@ -385,12 +410,15 @@ def _run_optimize(args: argparse.Namespace) -> int:
         sys.stdout.write(text)
     if args.json:
         Path(args.json).write_text(
-            json.dumps(report_dict(result, config), indent=2) + "\n"
+            json.dumps(report_dict(result, config), indent=2, allow_nan=False) + "\n"
         )
         log(f"wrote {args.json}")
     if not args.quiet:
         log("")
         log(format_report(result, config))
+    if not result.valid:
+        _stderr("codonopt: unresolved mandatory constraints; output is a candidate, not a valid design")
+        return 2
     return 0
 
 

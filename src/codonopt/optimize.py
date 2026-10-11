@@ -7,10 +7,11 @@ free to push a window's GC content back out of range, and nothing measured the
 overall result. This module replaces the four passes with one weighted
 objective (:mod:`codonopt.state`) and a local search over synonymous codons.
 
-Two phases run per restart:
+Three phases run per restart:
 
 * greedy sweeps, which visit every codon in random order and keep the best
   synonymous replacement, repeating until a whole sweep changes nothing;
+* bounded coordinated repair around unresolved mandatory requirements;
 * optional simulated annealing, which accepts occasional uphill moves so the
   search can leave a local minimum.
 
@@ -23,10 +24,12 @@ from __future__ import annotations
 import math
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from itertools import product
 from typing import Callable
 
 from .config import DesignConfig, OptimizerSettings
+from .constraints import constraint_violations
 from .sequence import (
     AA_TO_CODONS,
     translate,
@@ -50,9 +53,8 @@ class OptimizationResult:
         protein: The protein it encodes, which equals the input protein.
         score: Final objective value.
         breakdown: Final per-term objective values.
-        initial_sequence: The starting sequence of the restart that produced
-            this result, before local search ran on it. With several restarts
-            this is the winning restart's seed, not the best seed.
+        initial_sequence: Original DNA input, or the first seed for a protein
+            design. This baseline is preserved even if a later restart wins.
         initial_score: Its objective value.
         initial_breakdown: Its per-term objective values.
         sweeps: Greedy sweeps run, summed over restarts.
@@ -79,6 +81,13 @@ class OptimizationResult:
     hit_time_limit: bool = False
     cancelled: bool = False
     notes: list[str] = field(default_factory=list)
+    valid: bool = True
+    unresolved_constraints: list[dict] = field(default_factory=list)
+    stop_reason: str = "completed"
+    effective_seed: int | None = None
+    search_settings: dict = field(default_factory=dict)
+    winning_seed_sequence: str = ""
+    repair_evaluated: int = 0
 
     @property
     def improvement(self) -> float:
@@ -91,6 +100,8 @@ def seed_sequence(
     table: CodonUsage,
     rng: random.Random,
     mode: str = "weighted",
+    *,
+    excluded_codons: tuple[str, ...] = (),
 ) -> str:
     """Build a starting coding sequence for ``protein``.
 
@@ -105,6 +116,23 @@ def seed_sequence(
     Raises:
         ValueError: On an unknown ``mode``.
     """
+    if excluded_codons:
+        sequence = []
+        for aa in protein:
+            options = [c for c in AA_TO_CODONS[aa] if c not in excluded_codons]
+            if not options:
+                raise ValueError(f"all codons for {aa} are excluded")
+            if mode == "weighted":
+                frequencies = [table.frequency(c) for c in options]
+                codon = rng.choices(options, weights=frequencies if sum(frequencies) else None, k=1)[0]
+            elif mode == "best":
+                codon = max(options, key=table.frequency)
+            elif mode == "random":
+                codon = rng.choice(options)
+            else:
+                raise ValueError(f"unknown seed mode {mode!r}")
+            sequence.append(codon)
+        return "".join(sequence)
     if mode == "weighted":
         return "".join(table.sample(aa, rng) for aa in protein)
     if mode == "best":
@@ -145,34 +173,67 @@ def optimize(
         if translate(start) != protein:
             raise ValueError("start sequence does not encode the given protein")
 
-    rng = random.Random(settings.seed)
+    if config.protected_codons and start is None:
+        raise ValueError("protected_codons require a starting DNA sequence")
+    if any(i >= len(protein) for i in config.protected_codons):
+        raise ValueError("protected codon index is outside the coding sequence")
+    for i, aa in enumerate(protein):
+        if i not in config.protected_codons and not set(AA_TO_CODONS[aa]) - set(config.excluded_codons):
+            raise ValueError(f"all codons for {aa} at position {i} are excluded")
+
+    effective_seed = settings.seed if settings.seed is not None else random.SystemRandom().getrandbits(31)
+    rng = random.Random(effective_seed)
     started = time.perf_counter()
     deadline = (
         started + settings.max_seconds if settings.max_seconds is not None else None
     )
     should_stop: Callable[[], bool] | None = settings.should_stop  # type: ignore[assignment]
+    stop_reason = "completed"
 
     def expired() -> bool:
         """True once the time budget is spent or the caller asked to stop."""
-        if should_stop is not None and should_stop():
+        nonlocal stop_reason
+        if stop_reason != "completed":
             return True
-        return deadline is not None and time.perf_counter() >= deadline
+        if should_stop is not None and should_stop():
+            stop_reason = "cancelled"
+            return True
+        if deadline is not None and time.perf_counter() >= deadline:
+            stop_reason = "time_limit"
+            return True
+        return False
 
     best: SequenceState | None = None
-    best_initial: tuple[str, float] | None = None
+    winning_seed = ""
+    baseline: SequenceState | None = None
     sweeps = evaluated = accepted = restarts_run = 0
     hit_limit = False
+    repair_evaluated = 0
 
     for restart in range(settings.restarts):
         if best is not None and expired():
             hit_limit = True
             break
-        seed = (
-            start
-            if restart == 0 and start is not None
-            else seed_sequence(protein, config.table, rng, settings.seed_mode)
-        )
+        if restart == 0 and start is not None:
+            seed = start
+        elif config.protected_codons:
+            seed = "".join(
+                start[3*i:3*i+3] if i in config.protected_codons else
+                seed_sequence(aa, config.table, rng, settings.seed_mode,
+                              excluded_codons=config.excluded_codons)
+                for i, aa in enumerate(protein)
+            )
+        else:
+            seed = seed_sequence(protein, config.table, rng, settings.seed_mode,
+                                 excluded_codons=config.excluded_codons)
+        if config.protected_codons:
+            codons = [seed[i:i+3] for i in range(0, len(seed), 3)]
+            for i in config.protected_codons:
+                codons[i] = start[3*i:3*i+3]
+            seed = "".join(codons)
         state = SequenceState(seed, config)
+        if baseline is None:
+            baseline = SequenceState(seed, config)
         initial = (state.sequence, state.score)
         restarts_run += 1
         report(
@@ -188,6 +249,20 @@ def optimize(
         accepted += local_accepted
         hit_limit = hit_limit or stopped
 
+        if state.violations and not stopped and settings.repair_candidates:
+            count, kept, stopped = _repair(state, settings, expired)
+            repair_evaluated += count
+            evaluated += count
+            accepted += kept
+            hit_limit = hit_limit or stopped
+            report(f"repair: {count} candidates, {state.violations} mandatory violations remain")
+            if kept and not stopped:
+                extra_sweeps, extra_evaluated, extra_accepted, stopped = _greedy(state, rng, settings, expired)
+                sweeps += extra_sweeps
+                evaluated += extra_evaluated
+                accepted += extra_accepted
+                hit_limit = hit_limit or stopped
+
         if settings.anneal_steps and not stopped:
             annealed, anneal_evaluated, anneal_accepted, stopped = _anneal(
                 state, rng, settings, expired
@@ -202,24 +277,31 @@ def optimize(
             f"restart {restart + 1}/{settings.restarts}: "
             f"final score {state.score:.2f}"
         )
-        if best is None or state.score < best.score:
+        if best is None or _better(state.rank, best.rank):
             best = state
-            best_initial = initial
+            winning_seed = seed
 
-    assert best is not None and best_initial is not None  # restarts >= 1
+    assert best is not None and baseline is not None  # restarts >= 1
     if translate(best.sequence) != protein:  # pragma: no cover - safety net
         raise AssertionError("optimizer changed the encoded protein")
 
-    cancelled = bool(hit_limit and should_stop is not None and should_stop())
-    initial_state = SequenceState(best_initial[0], config)
+    # Validate independently rather than treating the incremental counter as
+    # proof of feasibility. Never label heuristic failure as impossibility.
+    unresolved = constraint_violations(best.sequence, config)
+    if bool(unresolved) != bool(best.violations):
+        raise AssertionError("incremental constraint count disagrees with independent validation")
+    cancelled = stop_reason == "cancelled"
+    search_settings = {f.name: getattr(settings, f.name) for f in fields(settings)
+                       if f.name not in {"progress", "should_stop"}}
+    search_settings["seed"] = effective_seed
     return OptimizationResult(
         sequence=best.sequence,
         protein=protein,
         score=best.score,
         breakdown=best.breakdown(),
-        initial_sequence=best_initial[0],
-        initial_score=best_initial[1],
-        initial_breakdown=initial_state.breakdown(),
+        initial_sequence=baseline.sequence,
+        initial_score=baseline.score,
+        initial_breakdown=baseline.breakdown(),
         sweeps=sweeps,
         moves_evaluated=evaluated,
         moves_accepted=accepted,
@@ -227,6 +309,14 @@ def optimize(
         elapsed=time.perf_counter() - started,
         hit_time_limit=hit_limit and not cancelled,
         cancelled=cancelled,
+        valid=not unresolved,
+        unresolved_constraints=unresolved,
+        stop_reason=stop_reason,
+        effective_seed=effective_seed,
+        search_settings=search_settings,
+        winning_seed_sequence=winning_seed,
+        repair_evaluated=repair_evaluated,
+        notes=(["Mandatory constraints remain unresolved; this is not proof of impossibility."] if unresolved else []),
     )
 
 
@@ -249,6 +339,8 @@ def _greedy(
     expired: Callable[[], bool],
 ) -> tuple[int, int, int, bool]:
     """Run greedy sweeps until nothing improves. Returns counters."""
+    if expired():
+        return 0, 0, 0, True
     order = list(range(state.codon_count))
     sweeps = evaluated = accepted = 0
     for _ in range(settings.max_sweeps):
@@ -257,20 +349,20 @@ def _greedy(
         improved = 0
         for counter, position in enumerate(order):
             if not counter % 64 and expired():
-                return sweeps, evaluated, accepted, True
+                return sweeps, evaluated, accepted + improved, True
             options = state.alternatives(position)
-            if len(options) == 1:
+            if options == (state.codon(position),):
                 continue
             current = state.codon(position)
-            best_codon, best_score = current, state.score
+            best_codon, best_rank = current, state.rank
             for option in options:
                 if option == current:
                     continue
                 state.set_codon(position, option)
                 evaluated += 1
-                score = state.score
-                if score < best_score - _EPSILON:
-                    best_codon, best_score = option, score
+                rank = state.rank
+                if _better(rank, best_rank):
+                    best_codon, best_rank = option, rank
             state.set_codon(position, best_codon)
             if best_codon != current:
                 improved += 1
@@ -278,6 +370,65 @@ def _greedy(
         if not improved:
             break
     return sweeps, evaluated, accepted, False
+
+
+def _better(candidate: tuple[int, float], incumbent: tuple[int, float]) -> bool:
+    return candidate[0] < incumbent[0] or (candidate[0] == incumbent[0] and candidate[1] < incumbent[1] - _EPSILON)
+
+
+def _repair(state: SequenceState, settings: OptimizerSettings,
+            expired: Callable[[], bool]) -> tuple[int, int, bool]:
+    """Bounded coordinated repair around unresolved regions.
+
+    Intermediate edits may violate constraints; only the complete candidate
+    is compared with the incumbent. The search budget is per restart and is
+    shared across passes and regions.
+    """
+    evaluated = accepted = 0
+    while state.violations and evaluated < settings.repair_candidates:
+        changed = False
+        failures = constraint_violations(state.sequence, state.config)
+        for failure in failures:
+            for region in failure["regions"]:
+                offset = len(state.config.left_flank)
+                lo = max(0, (region["start"] - offset) // 3)
+                hi = min(state.codon_count, (region["end"] - offset + 2) // 3)
+                if lo >= hi:  # wholly fixed context cannot be edited
+                    continue
+                mutable = [p for p in range(max(0, lo - 1), min(state.codon_count, hi + 1))
+                           if len(state.alternatives(p)) > 1]
+                # Long failures are addressed with overlapping local blocks;
+                # do not enumerate combinations across an entire long run.
+                for width in range(2, settings.repair_max_codons + 1):
+                    for block_start in range(max(1, len(mutable) - width + 1)):
+                        positions = mutable[block_start:block_start + width]
+                        if len(positions) != width:
+                            continue
+                        original = tuple(state.codon(p) for p in positions)
+                        best_codons, best_rank = original, state.rank
+                        options = [state.alternatives(p) for p in positions]
+                        for candidate in product(*options):
+                            if candidate == original:
+                                continue
+                            if evaluated >= settings.repair_candidates or expired():
+                                for p, c in zip(positions, best_codons):
+                                    state.set_codon(p, c)
+                                return evaluated, accepted + int(best_codons != original), expired()
+                            for p, c in zip(positions, candidate):
+                                state.set_codon(p, c)
+                            evaluated += 1
+                            if _better(state.rank, best_rank):
+                                best_codons, best_rank = candidate, state.rank
+                        for p, c in zip(positions, best_codons):
+                            state.set_codon(p, c)
+                        if best_codons != original:
+                            accepted += 1
+                            changed = True
+                        if state.violations == 0:
+                            return evaluated, accepted, False
+        if not changed:
+            break
+    return evaluated, accepted, False
 
 
 def _anneal(
@@ -300,15 +451,15 @@ def _anneal(
     if not positions or steps <= 0:
         return None, 0, 0, False
 
-    best_sequence, best_score = state.sequence, state.score
-    cooling = (settings.end_temperature / settings.start_temperature) ** (
-        1.0 / max(1, steps - 1)
-    )
-    temperature = settings.start_temperature
+    best_sequence, best_rank = state.sequence, state.rank
     evaluated = accepted = 0
     stopped = False
 
     for step in range(steps):
+        # Schedule is tied to iterations, including draws of the current codon.
+        fraction = step / max(1, steps - 1)
+        temperature = math.exp((1-fraction)*math.log(settings.start_temperature)
+                               + fraction*math.log(settings.end_temperature))
         if not step % 256 and expired():
             stopped = True
             break
@@ -318,17 +469,19 @@ def _anneal(
         option = rng.choice(options)
         if option == current:
             continue
-        previous_score = state.score
+        previous_rank = state.rank
         state.set_codon(position, option)
         evaluated += 1
-        delta = state.score - previous_score
-        if delta <= 0 or rng.random() < math.exp(-delta / temperature):
+        delta = state.score - previous_rank[1]
+        if state.violations < previous_rank[0] or (
+            state.violations == previous_rank[0] and
+            (delta <= 0 or rng.random() < math.exp(-delta / temperature))
+        ):
             accepted += 1
-            if state.score < best_score - _EPSILON:
-                best_sequence, best_score = state.sequence, state.score
+            if _better(state.rank, best_rank):
+                best_sequence, best_rank = state.sequence, state.rank
         else:
             state.set_codon(position, current)
-        temperature *= cooling
 
     if state.sequence != best_sequence:
         state = SequenceState(best_sequence, state.config)

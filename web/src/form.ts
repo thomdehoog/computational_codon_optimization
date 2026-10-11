@@ -91,7 +91,7 @@ export function reset(meta: Meta): void {
   num("gc-low").value = String(d.gc_range[0]);
   num("gc-high").value = String(d.gc_range[1]);
   num("max-homopolymer").value = String(d.max_homopolymer);
-  $<HTMLSelectElement>("splice").value = "auto";
+  $<HTMLSelectElement>("splice").value = "none";
   $<HTMLInputElement>("effort-standard").checked = true;
   num("seconds").value = String(d.seconds);
   num("seed").value = "";
@@ -146,7 +146,9 @@ export function describeSplice(meta: Meta): void {
   if (backend === "maxent" && !meta.maxent_available) {
     hint.textContent = "MaxEntScan is not installed, so this will report an error. Pick Automatic or Consensus screen.";
   } else if (backend === "auto") {
-    hint.textContent = meta.maxent_available
+    hint.textContent = $<HTMLSelectElement>("table").value !== "human"
+      ? "Automatic splice screening is only enabled for the bundled human host. Other hosts need an explicit backend."
+      : meta.maxent_available
       ? "Uses MaxEntScan."
       : "MaxEntScan is not installed, so a simpler consensus screen is used.";
   } else if (backend === "motif") {

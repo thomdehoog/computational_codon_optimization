@@ -102,6 +102,18 @@ class CodonUsage:
     weights: dict[str, float]
     description: str = ""
 
+    def __post_init__(self) -> None:
+        for name, values in (("frequencies", self.frequencies), ("weights", self.weights)):
+            if set(values) != set(CODON_TO_AA):
+                raise ValueError(f"{name} must cover every standard genetic-code codon")
+            if any(not math.isfinite(v) or not 0 <= v <= 1 for v in values.values()):
+                raise ValueError(f"{name} must contain finite values between 0 and 1")
+        for codons in AA_TO_CODONS.values():
+            if not math.isclose(sum(self.frequencies[c] for c in codons), 1.0, abs_tol=1e-12):
+                raise ValueError("codon frequencies must be normalized within each family")
+            if not math.isclose(max(self.weights[c] for c in codons), 1.0, abs_tol=1e-12):
+                raise ValueError("each family must have a relative adaptiveness of 1")
+
     @classmethod
     def from_frequencies(
         cls,
@@ -114,9 +126,11 @@ class CodonUsage:
 
         Values are normalised within each amino acid family, so either raw
         codon counts or already-normalised frequencies may be supplied. Codons
-        missing from ``frequencies`` default to 0 and are never chosen, unless
+        missing from ``frequencies`` default to 0 and are never sampled, unless
         every codon in a family is missing, in which case the family falls back
         to a uniform distribution.
+        Zero frequencies are absent observations, not forbidden codons; search
+        may use them. Use DesignConfig.excluded_codons for actual exclusions.
 
         Raises:
             ValueError: If a key is not a codon of the standard genetic code or
@@ -127,8 +141,8 @@ class CodonUsage:
             codon = codon.strip().upper().replace("U", "T")
             if codon not in CODON_TO_AA:
                 raise ValueError(f"not a codon of the standard genetic code: {codon!r}")
-            if value < 0:
-                raise ValueError(f"negative frequency for codon {codon}: {value}")
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"negative or non-finite frequency for codon {codon}: {value}")
             raw[codon] = float(value)
 
         normalised: dict[str, float] = {}
@@ -136,6 +150,8 @@ class CodonUsage:
         for aa, codons in AA_TO_CODONS.items():
             values = [raw.get(codon, 0.0) for codon in codons]
             total = sum(values)
+            if not math.isfinite(total):
+                raise ValueError(f"frequency total overflows for amino acid {aa}")
             if total <= 0:
                 values = [1.0] * len(codons)
                 total = float(len(codons))
