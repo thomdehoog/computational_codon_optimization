@@ -9,6 +9,7 @@ import platform
 from importlib.metadata import version, PackageNotFoundError
 
 from .config import DesignConfig
+from .constraints import unresolved_is_all_fixed_context
 from .metrics import (
     count_hairpin_pairs,
     find_hairpins,
@@ -228,5 +229,18 @@ def format_report(result: OptimizationResult, config: DesignConfig) -> str:
         lines += ["", "Remaining forbidden motifs: " + ", ".join(present)]
     if result.unresolved_constraints:
         lines += ["", "Unresolved requirements: " + ", ".join(
-            f"{v['criterion']} ({v['count']})" for v in result.unresolved_constraints)]
+            _describe_unresolved(v) for v in result.unresolved_constraints)]
+        if unresolved_is_all_fixed_context(result.unresolved_constraints):
+            lines += [
+                "Every occurrence lies wholly inside the fixed flanks, so no codon",
+                "choice can remove it. The coding sequence itself meets the requirements.",
+            ]
     return "\n".join(lines)
+
+
+def _describe_unresolved(violation: dict) -> str:
+    """One criterion, noting how much of it is beyond the optimizer's reach."""
+    fixed = violation.get("fixed_context_count", 0)
+    if not fixed:
+        return f"{violation['criterion']} ({violation['count']})"
+    return f"{violation['criterion']} ({violation['count']}, {fixed} in fixed flanks)"

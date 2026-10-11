@@ -25,7 +25,7 @@ from __future__ import annotations
 __version__ = "0.3.0"
 
 from .config import DesignConfig, OptimizerSettings, Weights
-from .constraints import constraint_violations
+from .constraints import constraint_violations, unresolved_is_all_fixed_context
 from .index import KmerIndex
 from .metrics import (
     count_hairpin_pairs,
@@ -87,6 +87,7 @@ __all__ = [
     "reverse_complement",
     "seed_sequence",
     "translate",
+    "unresolved_is_all_fixed_context",
     "validate_dna",
     "validate_protein",
 ]

@@ -174,9 +174,17 @@ result = optimize_dna("ATGGGTCTCAAA", config, OptimizerSettings(seed=5))
 
 All context-dependent criteria scan the **complete supplied construct**,
 including fixed-only regions. A violation confined to a fixed flank remains
-unresolved. Codon usage and overall GC target apply to the CDS. Diagnostic
-positions and GC profiles use construct coordinates; `cds_start` records the
-offset. Flanks need not have lengths divisible by three.
+unresolved, because the construct really does contain it — but no codon choice
+can reach it either. Each unresolved criterion therefore reports
+`fixed_context_count` alongside its complete `count`, and every listed region
+carries a `fixed_context` flag. When the two counts match, the coding sequence
+already meets the requirement and only the context you supplied does not; the
+report and the CLI say so, and `unresolved_is_all_fixed_context()` tests for it.
+The exit code is still 2, since the construct as a whole is not valid.
+
+Codon usage and overall GC target apply to the CDS. Diagnostic positions and GC
+profiles use construct coordinates; `cds_start` records the offset. Flanks need
+not have lengths divisible by three.
 
 JSON reports preserve original input/first seed, winning restart seed, full
 effective configuration, actual codon-table data and hash, generated or supplied

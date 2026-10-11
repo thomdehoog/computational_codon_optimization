@@ -514,3 +514,42 @@ def test_built_interface_is_shipped_and_wired_to_the_token():
     assert "__CODONOPT_TOKEN__" in html
     assert "app.js" in html and "app.css" in html
     assert "<script>" not in html  # the content security policy forbids inline script
+
+
+# -- input that the worker used to reject, rejected at request time instead ---
+
+
+@pytest.mark.parametrize(
+    "payload,message",
+    [
+        ({"sequence": "MKV", "protected_codons": [0]}, "needs a starting DNA sequence"),
+        ({"sequence": "ATGAAAGTT", "protected_codons": [99]}, "outside the 3-codon"),
+        ({"sequence": "MKV", "excluded_codons": ["ATG"]}, "every codon for M is excluded"),
+        ({"sequence": "MKV", "left_flank": "ACGT" * 11_500}, "complete construct is"),
+    ],
+)
+def test_unsatisfiable_requests_are_refused_before_a_job_starts(client, payload, message):
+    status, _, body = client.call("POST", "/api/jobs", {**payload, **FAST})
+    assert status == 400, body
+    assert message in body["error"]
+
+
+def test_flanks_are_counted_in_bases_not_residues(client):
+    """A protein plus flanks is measured as the construct the user will order."""
+    protein = "M" * 1_000          # 3,000 bases of CDS
+    status, _, body = client.start({"sequence": protein, "left_flank": "ACGT" * 11_000, **FAST})
+    assert status == 400, body     # 44,000 + 3,000 is over the 45,000-base limit
+    assert "complete construct is 47,000 bases" in body["error"]
+    status, _, _ = client.start({"sequence": protein, "left_flank": "ACGT" * 1_000, **FAST})
+    assert status == 202
+
+
+def test_protected_codons_are_accepted_with_starting_dna(client):
+    status, _, started = client.start(
+        {"sequence": "ATGAAAGTTCTG", "protected_codons": [0, 3], **FAST}
+    )
+    assert status == 202
+    done = client.wait(started["id"])
+    assert done["status"] == "done"
+    sequence = done["result"]["sequence"]
+    assert sequence[0:3] == "ATG" and sequence[9:12] == "CTG"

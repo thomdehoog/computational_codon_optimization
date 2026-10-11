@@ -10,9 +10,10 @@ import pytest
 
 from codonopt import (DesignConfig, OptimizerSettings, Weights, Motif, SequenceState,
                       constraint_violations, optimize, optimize_dna, get_table,
-                      resolve_motifs, report_dict, measure, translate)
+                      resolve_motifs, report_dict, measure, translate,
+                      format_report, unresolved_is_all_fixed_context)
 from codonopt.cli import main
-from codonopt.sequence import reverse_complement
+from codonopt.sequence import AA_TO_CODONS, reverse_complement
 from codonopt.splice import MotifScorer, get_scorer
 from codonopt.tables import CodonUsage
 
@@ -264,3 +265,76 @@ def test_required_criteria_work_when_the_soft_weight_is_zero(criterion):
                           max_homopolymer=2, splice_scorer=MotifScorer())
     state = SequenceState("CAGGTAAGTAAAAAATTT", config)
     assert state.violations == sum(v["count"] for v in constraint_violations(state.sequence, config))
+
+
+# -- violations that no codon choice can reach -------------------------------
+
+
+def test_fixed_context_count_partitions_every_criterion_exactly():
+    """Each criterion splits its complete count into reachable and unreachable."""
+    rng = random.Random(4)
+    protein = "".join(rng.choice("ACDEFGHIKLMNPQRSTVWY") for _ in range(12))
+    cds = "".join(rng.choice(AA_TO_CODONS[a]) for a in protein)
+    config = DesignConfig(
+        left_flank="GAATTCAAAAAAAAGGGGGGGGCCCCCCCC",
+        right_flank="TTTTTTTTGGATCCGCGCGCGC",
+        motifs=tuple(resolve_motifs(["EcoRI", "BamHI"])),
+        required=("motif", "gc_window", "repeat", "hairpin", "homopolymer"),
+        repeat_k=6, hairpin_stem=5, max_homopolymer=3, gc_window=12, gc_step=3,
+    )
+    violations = constraint_violations(cds, config)
+    assert violations, "the fixture is meant to violate several criteria"
+    cds_start, cds_end = len(config.left_flank), len(config.left_flank) + len(cds)
+    for violation in violations:
+        assert 0 <= violation["fixed_context_count"] <= violation["count"]
+        for region in violation["regions"]:
+            reaches_cds = region["start"] < cds_end and region["end"] > cds_start
+            assert region["fixed_context"] is not reaches_cds
+
+    # The unreachable part is exactly what survives when the CDS is swapped for
+    # a different encoding: flank-only violations cannot depend on the CDS.
+    other = "".join(c for a in protein
+                    for c in [sorted(AA_TO_CODONS[a])[-1]])
+    fixed_now = {v["criterion"]: v["fixed_context_count"] for v in violations}
+    fixed_then = {v["criterion"]: v["fixed_context_count"]
+                  for v in constraint_violations(other, config)}
+    for criterion, count in fixed_now.items():
+        if count:
+            assert fixed_then.get(criterion) == count, criterion
+
+
+def test_a_motif_inside_a_flank_is_unresolved_but_flagged_unreachable():
+    config = DesignConfig(left_flank="GAATTC", motifs=tuple(resolve_motifs(["EcoRI"])))
+    result = optimize("MKV", config, OptimizerSettings(seed=1, max_seconds=30))
+    assert not result.valid, "the construct really does contain the site"
+    assert "GAATTC" not in result.sequence, "the CDS itself is clean"
+    (violation,) = result.unresolved_constraints
+    assert violation["criterion"] == "motif"
+    assert violation["count"] == violation["fixed_context_count"] == 1
+    assert violation["regions"][0]["fixed_context"] is True
+    assert unresolved_is_all_fixed_context(result.unresolved_constraints)
+
+
+def test_a_motif_in_the_cds_is_not_called_unreachable():
+    """A site the search could have removed must never be excused as context."""
+    config = DesignConfig(left_flank="GAATTC", motifs=(Motif("start", "ATG"),))
+    result = optimize("MW", config, OptimizerSettings(seed=1, max_seconds=30))
+    assert not result.valid
+    # ATG at the start of the CDS, and CAT (its reverse complement) across the
+    # junction: both touch the CDS, so neither is excused as fixed context.
+    (violation,) = result.unresolved_constraints
+    assert violation["count"] == 2 and violation["fixed_context_count"] == 0
+    assert all(r["fixed_context"] is False for r in violation["regions"])
+    assert not unresolved_is_all_fixed_context(result.unresolved_constraints)
+
+
+def test_report_and_cli_separate_an_unreachable_flank_failure(capsys):
+    config = DesignConfig(left_flank="GAATTC", motifs=tuple(resolve_motifs(["EcoRI"])))
+    result = optimize("MKV", config, OptimizerSettings(seed=1, max_seconds=30))
+    text = format_report(result, config)
+    assert "motif (1, 1 in fixed flanks)" in text
+    assert "no codon" in text
+
+    assert main(["optimize", "--protein", "MKV", "--left-flank", "GAATTC",
+                 "--avoid", "EcoRI", "--seed", "1", "--quiet"]) == 2
+    assert "fixed flanks you supplied" in capsys.readouterr().err

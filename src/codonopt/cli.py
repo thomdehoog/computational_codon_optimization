@@ -18,6 +18,7 @@ from typing import Sequence
 
 from . import __version__
 from .config import DesignConfig, OptimizerSettings, Weights
+from .constraints import unresolved_is_all_fixed_context
 from .fasta import Record, format_fasta, read_fasta
 from .motifs import MOTIF_GROUPS, REGULATORY_MOTIFS, RESTRICTION_SITES, resolve_motifs
 from .optimize import optimize
@@ -417,7 +418,13 @@ def _run_optimize(args: argparse.Namespace) -> int:
         log("")
         log(format_report(result, config))
     if not result.valid:
-        _stderr("codonopt: unresolved mandatory constraints; output is a candidate, not a valid design")
+        if unresolved_is_all_fixed_context(result.unresolved_constraints):
+            _stderr(
+                "codonopt: the coding sequence meets every requirement, but the fixed "
+                "flanks you supplied do not; no codon choice can change that"
+            )
+        else:
+            _stderr("codonopt: unresolved mandatory constraints; output is a candidate, not a valid design")
         return 2
     return 0
 

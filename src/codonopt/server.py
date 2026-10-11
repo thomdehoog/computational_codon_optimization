@@ -54,7 +54,7 @@ from .motifs import (
 )
 from .optimize import OptimizationResult, optimize
 from .report import report_dict
-from .sequence import translate, validate_dna, validate_protein
+from .sequence import AA_TO_CODONS, translate, validate_dna, validate_protein
 from .splice import get_scorer, maxent_available
 from .tables import TABLES, get_table, table_from_text
 
@@ -304,8 +304,13 @@ def build_request(payload: object) -> JobSpec:
         right_flank = payload.get("right_flank", "")
         if not isinstance(left_flank, str) or not isinstance(right_flank, str):
             raise RequestError("flanks must be DNA strings")
-        if len(left_flank) + len(sequence) + len(right_flank) > 3 * MAX_RESIDUES:
-            raise RequestError("the complete construct exceeds the interface length limit")
+        # Compare bases with bases: `sequence` is residues for a protein input.
+        construct_bases = len(left_flank) + 3 * len(protein) + len(right_flank)
+        if construct_bases > 3 * MAX_RESIDUES:
+            raise RequestError(
+                f"the complete construct is {construct_bases:,} bases; the interface "
+                f"accepts up to {3 * MAX_RESIDUES:,}, flanks included"
+            )
 
         config = DesignConfig(
             table=table,
@@ -332,6 +337,26 @@ def build_request(payload: object) -> JobSpec:
             left_flank=left_flank,
             right_flank=right_flank,
         )
+
+        # The optimizer rejects these too, but inside the worker thread, where
+        # the caller would see them as a failed job rather than a bad request.
+        if config.protected_codons and start is None:
+            raise RequestError(
+                "protecting codons needs a starting DNA sequence to protect them from; "
+                "paste DNA rather than a protein"
+            )
+        if any(i >= len(protein) for i in config.protected_codons):
+            raise RequestError(
+                f"protected codon index is outside the {len(protein)}-codon sequence"
+            )
+        for index, residue in enumerate(protein):
+            if index in config.protected_codons:
+                continue
+            if not set(AA_TO_CODONS[residue]) - set(config.excluded_codons):
+                raise RequestError(
+                    f"every codon for {residue} is excluded, so position {index} "
+                    "cannot be encoded"
+                )
 
         effort = payload.get("effort", "standard")
         if effort not in EFFORT:
