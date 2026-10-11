@@ -216,7 +216,8 @@ def test_a_job_runs_to_completion_and_keeps_the_protein(client):
         {"sequence": PROTEIN, "avoid": ["golden_gate", "EcoRI"], **FAST}
     )
     assert status == 202
-    assert started["status"] == "running"
+    # The worker may finish before the HTTP start response is serialized.
+    assert started["status"] in {"running", "done"}
 
     done = client.wait(started["id"])
     assert done["status"] == "done"

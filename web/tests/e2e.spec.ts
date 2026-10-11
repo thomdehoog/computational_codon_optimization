@@ -118,11 +118,12 @@ test("explains problems instead of failing silently", async ({ page }) => {
 test("can cancel a long run and hands the controls back", async ({ page }) => {
   const errors = await open(page);
   await page.locator("#btn-example").click();
+  const example = await page.locator("#sequence").inputValue();
+  await page.locator("#sequence").fill(example.repeat(20));
   await page.locator("#seconds").fill("60");
   await page.locator('label[for="effort-thorough"]').click();
   await page.locator("#run").click();
   await expect(page.locator("#cancel")).toBeVisible();
-  await page.waitForTimeout(1500);
   await page.locator("#cancel").click();
   // What matters is that Stop ends the run and restores the form, whatever the
   // search had managed by then.
