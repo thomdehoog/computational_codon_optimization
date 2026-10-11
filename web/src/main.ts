@@ -120,6 +120,7 @@ async function main(): Promise<void> {
   tableSelect.addEventListener("change", () => {
     syncTable();
     describeTable(meta);
+    describeSplice(meta);
   });
   const tableText = $<HTMLTextAreaElement>("table-text");
   const tableFile = $<HTMLInputElement>("table-file");
@@ -168,7 +169,8 @@ async function main(): Promise<void> {
       say("The optimization failed.");
       showError(output, latest.error ?? "The optimization failed.");
     } else if (latest.result) {
-      say(latest.status === "cancelled" ? "Stopped early; showing the best sequence found." : "Optimization finished.");
+      say(!latest.result.valid ? "Finished with unresolved mandatory requirements." :
+        latest.status === "cancelled" ? "Stopped early; showing the best sequence found." : "Optimization finished.");
       showResult(output, latest.result, meta);
     }
   };

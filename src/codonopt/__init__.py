@@ -2,9 +2,8 @@
 
 A coding sequence can be written in many ways without changing the protein it
 encodes, and some of those ways are much easier to synthesise and express than
-others. This package searches that space under one weighted objective covering
-GC content, direct repeats, hairpins, homopolymer runs, forbidden motifs,
-cryptic splice sites and host codon preference.
+others. This package resolves configured mandatory requirements before
+improving soft sequence-quality and host-codon-preference objectives.
 
 Typical use::
 
@@ -23,9 +22,10 @@ codon for a synonymous one.
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .config import DesignConfig, OptimizerSettings, Weights
+from .constraints import constraint_violations
 from .index import KmerIndex
 from .metrics import (
     count_hairpin_pairs,
@@ -65,6 +65,7 @@ __all__ = [
     "SequenceState",
     "Weights",
     "available_tables",
+    "constraint_violations",
     "count_hairpin_pairs",
     "find_hairpins",
     "find_splice_sites",

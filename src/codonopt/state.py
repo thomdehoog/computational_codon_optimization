@@ -7,9 +7,8 @@ splice window, a codon -- so after a codon swap only the terms anchored near
 the edit need recomputing. Repeats and hairpins, which are not local, are
 carried by :class:`codonopt.index.KmerIndex`.
 
-The result is that a candidate codon swap costs time proportional to the window
-sizes involved rather than to the length of the sequence, which is what makes a
-whole-sequence search practical. :func:`SequenceState.audit` recomputes the
+Penalty recomputation is local, though each edit still copies the immutable
+sequence string. :func:`SequenceState.audit` recomputes the
 score from scratch and is used by the tests to confirm the incremental path
 agrees with a full recomputation.
 """
@@ -21,7 +20,7 @@ import re
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
-from .config import DesignConfig
+from .config import DesignConfig, Weights
 from .index import KmerIndex
 from .metrics import window_starts
 from .motifs import Motif
@@ -37,8 +36,6 @@ from .sequence import (
 from .splice import ACCEPTOR_WINDOW, DONOR_WINDOW
 
 __all__ = ["SequenceState", "ScoreBreakdown"]
-
-_MIN_WEIGHT = 1e-9
 
 
 @dataclass(frozen=True)
@@ -81,15 +78,28 @@ class SequenceState:
         "_pattern_motifs",
         "_motif_lengths",
         "_splice_terms",
+        "_coding_start",
+        "_coding_length",
+        "_required_weights",
+        "_required_total",
     )
 
     def __init__(self, sequence: str, config: DesignConfig) -> None:
-        self._sequence = validate_dna(sequence, in_frame=True)
+        sequence = validate_dna(sequence, in_frame=True)
+        self._coding_start = len(config.left_flank)
+        self._coding_length = len(sequence)
+        self._sequence = config.left_flank + sequence + config.right_flank
         self.config = config
-        self.protein = translate(self._sequence)
+        self.protein = translate(sequence)
+        if any(i >= len(self.protein) for i in config.protected_codons):
+            raise ValueError("protected codon index is outside the coding sequence")
         weights = config.weights
+        self._required_weights = Weights(**{
+            name: float(name in config.required)
+            for name in vars(weights)
+        })
 
-        self._gc = gc_count(self._sequence)
+        self._gc = gc_count(sequence)
         self._window_starts = window_starts(
             len(self._sequence), config.gc_window, config.gc_step
         )
@@ -106,13 +116,13 @@ class SequenceState:
                 (ACCEPTOR_WINDOW, config.splice_scorer.score_acceptor,
                  config.effective_acceptor_cutoff),
             )
-            if config.splice_scorer is not None and weights.splice > _MIN_WEIGHT
+            if config.splice_scorer is not None
             else ()
         )
 
         self._repeat_index = (
             KmerIndex(self._sequence, config.repeat_k, track_hairpins=False)
-            if weights.repeat > _MIN_WEIGHT
+            if weights.repeat > 0 or "repeat" in config.required
             else None
         )
         self._hairpin_index = (
@@ -123,36 +133,62 @@ class SequenceState:
                 max_loop=config.hairpin_max_loop,
                 track_hairpins=True,
             )
-            if weights.hairpin > _MIN_WEIGHT
+            if weights.hairpin > 0 or "hairpin" in config.required
             else None
         )
         self._local_total = self._local(0, len(self._sequence))
+        self._required_total = self._local(0, len(self._sequence), required=True)
 
     # -- read-only views ---------------------------------------------------
 
     @property
     def sequence(self) -> str:
         """The current coding sequence."""
+        return self._sequence[self._coding_start : self._coding_start + self._coding_length]
+
+    @property
+    def context_sequence(self) -> str:
+        """The CDS together with immutable construct flanks."""
         return self._sequence
 
     @property
     def codon_count(self) -> int:
         """Number of codons in the sequence."""
-        return len(self._sequence) // 3
+        return self._coding_length // 3
 
     @property
     def score(self) -> float:
         """The weighted objective; lower is better."""
         return self._local_total + self._global_terms()
 
+    @property
+    def violations(self) -> int:
+        """Number of mandatory constraint violations, maintained incrementally."""
+        total = self._required_total
+        if "repeat" in self.config.required:
+            total += self._repeat_index.redundant
+        if "hairpin" in self.config.required:
+            total += self._hairpin_index.hairpin_pairs
+        return int(total)
+
+    @property
+    def rank(self) -> tuple[int, float]:
+        """Feasibility takes precedence over the soft objective."""
+        return self.violations, self.score
+
     def codon(self, codon_index: int) -> str:
         """Return the codon at ``codon_index``."""
-        start = codon_index * 3
+        if not 0 <= codon_index < self.codon_count:
+            raise IndexError("codon index is outside the coding sequence")
+        start = self._coding_start + codon_index * 3
         return self._sequence[start : start + 3]
 
     def alternatives(self, codon_index: int) -> tuple[str, ...]:
         """Return every synonymous codon for the residue at ``codon_index``."""
-        return AA_TO_CODONS[CODON_TO_AA[self.codon(codon_index)]]
+        current = self.codon(codon_index)
+        if codon_index in self.config.protected_codons:
+            return (current,)
+        return tuple(c for c in AA_TO_CODONS[CODON_TO_AA[current]] if c not in self.config.excluded_codons)
 
     # -- mutation ----------------------------------------------------------
 
@@ -166,11 +202,15 @@ class SequenceState:
         Raises:
             ValueError: If ``codon`` does not encode the same residue.
         """
-        lo = codon_index * 3
+        previous = self.codon(codon_index)
+        lo = self._coding_start + codon_index * 3
         hi = lo + 3
-        previous = self._sequence[lo:hi]
         if codon == previous:
             return previous
+        if codon_index in self.config.protected_codons:
+            raise ValueError(f"codon {codon_index} is protected")
+        if codon not in CODON_TO_AA:
+            raise ValueError(f"not a standard genetic-code codon: {codon!r}")
         if CODON_TO_AA[codon] != CODON_TO_AA[previous]:
             raise ValueError(
                 f"{codon} encodes {CODON_TO_AA[codon]} but position "
@@ -178,6 +218,7 @@ class SequenceState:
             )
 
         before = self._local(lo, hi)
+        required_before = self._local(lo, hi, required=True)
         self._sequence = self._sequence[:lo] + codon + self._sequence[hi:]
         self._gc += gc_count(codon) - gc_count(previous)
         if self._repeat_index is not None:
@@ -185,6 +226,7 @@ class SequenceState:
         if self._hairpin_index is not None:
             self._hairpin_index.replace_range(self._sequence, lo, hi)
         self._local_total += self._local(lo, hi) - before
+        self._required_total += self._local(lo, hi, required=True) - required_before
         return previous
 
     # -- scoring -----------------------------------------------------------
@@ -192,24 +234,23 @@ class SequenceState:
     def _global_terms(self) -> float:
         weights = self.config.weights
         total = 0.0
-        if weights.gc_global > _MIN_WEIGHT:
-            fraction = self._gc / len(self._sequence)
-            total += weights.gc_global * abs(fraction - self.config.gc_target)
+        if weights.gc_global > 0:
+            total += weights.gc_global * abs(self._gc - self.config.gc_target * self._coding_length) / 300
         if self._repeat_index is not None:
             total += weights.repeat * self._repeat_index.redundant
         if self._hairpin_index is not None:
             total += weights.hairpin * self._hairpin_index.hairpin_pairs
         return total
 
-    def _local(self, lo: int, hi: int) -> float:
+    def _local(self, lo: int, hi: int, *, required: bool = False) -> float:
         """Weighted penalty of every term anchored near bases ``[lo, hi)``."""
         sequence = self._sequence
         length = len(sequence)
         config = self.config
-        weights = config.weights
+        weights = self._required_weights if required else config.weights
         total = 0.0
 
-        if weights.gc_window > _MIN_WEIGHT and self._window_starts:
+        if weights.gc_window > 0 and self._window_starts:
             window = config.gc_window
             low_bound, high_bound = config.gc_range
             starts = self._window_starts
@@ -222,18 +263,18 @@ class SequenceState:
                     + sequence.count("C", position, end)
                 ) / (end - position)
                 if fraction < low_bound:
-                    total += weights.gc_window * (low_bound - fraction)
+                    total += 1 if required else weights.gc_window * (low_bound - fraction)
                 elif fraction > high_bound:
-                    total += weights.gc_window * (fraction - high_bound)
+                    total += 1 if required else weights.gc_window * (fraction - high_bound)
 
-        if weights.homopolymer > _MIN_WEIGHT:
+        if weights.homopolymer > 0:
             run = config.max_homopolymer
             for i in range(max(run, lo), min(length, hi + run)):
                 segment = sequence[i - run : i + 1]
                 if segment == segment[0] * (run + 1):
                     total += weights.homopolymer
 
-        if weights.motif > _MIN_WEIGHT:
+        if weights.motif > 0:
             for size in self._motif_lengths:
                 literals = self._literals_by_length[size]
                 first = max(0, lo - size + 1)
@@ -249,22 +290,26 @@ class SequenceState:
                         total += weights.motif
 
         for window, score_window, cutoff in self._splice_terms:
+            if weights.splice == 0:
+                continue
             first = max(0, lo - window + 1)
             last = min(length - window + 1, hi)
             weight = weights.splice
             for position in range(first, last):
                 forward = sequence[position : position + window]
-                score = score_window(forward)
-                if score > cutoff:
-                    total += weight * (score - cutoff)
-                score = score_window(reverse_complement(forward))
-                if score > cutoff:
-                    total += weight * (score - cutoff)
+                for strand in config.splice_strands:
+                    candidate = reverse_complement(forward) if strand == "reverse" else forward
+                    score = score_window(candidate)
+                    if score > cutoff:
+                        total += 1 if required else weight * (score - cutoff)
 
-        if weights.usage > _MIN_WEIGHT:
+        if weights.usage > 0 or (required and config.excluded_codons):
             cost = self._usage_cost
-            for index in range(lo // 3, (hi + 2) // 3):
-                total += weights.usage * cost[sequence[index * 3 : index * 3 + 3]]
+            first = max(0, (lo - self._coding_start) // 3)
+            last = min(self.codon_count, (hi - self._coding_start + 2) // 3)
+            for index in range(first, last):
+                codon = self.codon(index)
+                total += int(codon in config.excluded_codons) if required else weights.usage * cost[codon]
 
         return total
 
@@ -276,7 +321,7 @@ class SequenceState:
         Used by the tests to confirm the incremental bookkeeping has not
         drifted from a full recomputation.
         """
-        return SequenceState(self._sequence, self.config).score
+        return SequenceState(self.sequence, self.config).score
 
     def breakdown(self) -> ScoreBreakdown:
         """Return the objective split into its individual terms."""
@@ -286,9 +331,9 @@ class SequenceState:
         raw: dict[str, float] = {}
         terms: dict[str, float] = {}
 
-        fraction = self._gc / len(sequence)
+        fraction = self._gc / self._coding_length
         raw["gc_global"] = fraction
-        terms["gc_global"] = weights.gc_global * abs(fraction - config.gc_target)
+        terms["gc_global"] = weights.gc_global * abs(self._gc - config.gc_target * self._coding_length) / 300
 
         window_excess = 0.0
         low_bound, high_bound = config.gc_range
@@ -339,14 +384,15 @@ class SequenceState:
         for window, score_window, cutoff in self._splice_terms:
             for position in range(len(sequence) - window + 1):
                 forward = sequence[position : position + window]
-                for candidate in (forward, reverse_complement(forward)):
+                for strand in config.splice_strands:
+                    candidate = reverse_complement(forward) if strand == "reverse" else forward
                     score = score_window(candidate)
                     if score > cutoff:
                         splice_excess += score - cutoff
         raw["splice"] = splice_excess
         terms["splice"] = weights.splice * splice_excess
 
-        usage = sum(self._usage_cost[codon] for codon in split_codons(sequence))
+        usage = sum(self._usage_cost[codon] for codon in split_codons(self.sequence))
         raw["usage"] = usage
         terms["usage"] = weights.usage * usage
 

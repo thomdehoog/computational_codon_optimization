@@ -134,6 +134,19 @@ class Motif:
         return f"Motif({self.name!r}, {self.pattern!r})"
 
 
+def canonicalize_motifs(motifs) -> tuple[Motif, ...]:
+    """Deduplicate both-strand patterns and reject ambiguous report names."""
+    patterns: dict[str, Motif] = {}
+    names: dict[str, str] = {}
+    for motif in motifs:
+        key = min(motif.pattern, _revcomp_iupac(motif.pattern))
+        if motif.name in names and names[motif.name] != key:
+            raise ValueError(f"motif name {motif.name!r} refers to different patterns")
+        names[motif.name] = key
+        patterns.setdefault(key, motif)
+    return tuple(patterns.values())
+
+
 _IUPAC_COMPLEMENT = str.maketrans(
     "ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN"
 )
@@ -177,6 +190,8 @@ def resolve_motifs(specs: list[str] | tuple[str, ...] | None) -> list[Motif]:
     def add(name: str, pattern: str) -> None:
         motif = Motif(name, pattern)
         key = min(motif.pattern, _revcomp_iupac(motif.pattern))
+        if any(m.name == name and k != key for k, m in resolved.items()):
+            raise ValueError(f"motif name {name!r} refers to different patterns")
         resolved.setdefault(key, motif)
 
     for raw in specs or ():

@@ -17,7 +17,8 @@ export function sequenceView(result: Result): HTMLElement {
   const flagged = new Set<number>();
   for (const hit of result.motif_hits) {
     for (const position of hit.positions) {
-      for (let i = Math.floor(position / 3); i <= Math.floor((position + hit.length - 1) / 3); i++) {
+      const start = position - result.final.cds_start;
+      for (let i = Math.max(0, Math.floor(start / 3)); i <= Math.min(codons - 1, Math.floor((start + hit.length - 1) / 3)); i++) {
         flagged.add(i);
       }
     }
@@ -75,7 +76,7 @@ export function sequenceView(result: Result): HTMLElement {
         "p",
         { class: "note warn", role: "status" },
         `Still contains ${result.motif_hits.map((hit) => `${hit.name} (${hit.positions.length})`).join(", ")}; ` +
-          "the marked codons overlap a site you asked to keep out.",
+          "matches are in the scored construct; overlapping CDS codons are marked.",
       )
     : null;
 

@@ -216,7 +216,8 @@ def test_a_job_runs_to_completion_and_keeps_the_protein(client):
         {"sequence": PROTEIN, "avoid": ["golden_gate", "EcoRI"], **FAST}
     )
     assert status == 202
-    assert started["status"] == "running"
+    # The worker may finish before the HTTP start response is serialized.
+    assert started["status"] in {"running", "done"}
 
     done = client.wait(started["id"])
     assert done["status"] == "done"
@@ -480,6 +481,23 @@ def test_request_errors_are_value_errors():
     assert issubclass(RequestError, ValueError)
     with pytest.raises(RequestError):
         build_request("not an object")
+
+
+def test_request_host_policy_and_context_options():
+    spec = build_request({"sequence": "TTTCTCTTT", "kind": "dna", "table": "ecoli",
+                          "splice_backend": "auto", "left_flank": "GGT",
+                          "right_flank": "A", "protected_codons": [0],
+                          "excluded_codons": ["TTA"], "required": ["motif", "gc_window"]})
+    assert spec.config.splice_scorer is None
+    assert spec.config.splice_strand == "forward"
+    assert spec.config.left_flank == "GGT" and spec.config.right_flank == "A"
+    assert spec.config.protected_codons == (0,)
+    assert spec.config.required == ("gc_window", "motif")
+    assert build_request({"sequence": "MKV"}).config.splice_scorer is None
+    for key, value in (("required", "motif"), ("protected_codons", [True]),
+                       ("left_flank", []), ("splice_strand", "unknown"), ("splice_strand", [])):
+        with pytest.raises(RequestError):
+            build_request({"sequence": "MKV", key: value})
 
 
 # ---------------------------------------------------------------- built assets

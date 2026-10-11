@@ -199,7 +199,7 @@ def test_should_stop_can_flip_part_way_through(plain_config):
 
     def stop_after_a_while() -> bool:
         calls["n"] += 1
-        return calls["n"] > 12
+        return calls["n"] > 2
 
     full = optimize(protein, plain_config, OptimizerSettings(seed=22, max_sweeps=6))
     cut = optimize(

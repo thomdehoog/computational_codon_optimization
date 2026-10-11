@@ -39,8 +39,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      # The default splice backend prefers MaxEntScan when it is installed, so
-      # without this job that path is never exercised in CI.
+      # Explicit/automatic human splice screening uses MaxEntScan when it is
+      # installed; exercise that optional backend as well as dependency-free runs.
       - run: pip install -e ".[dev]" "git+https://github.com/kepbod/maxentpy.git"
       - name: Confirm MaxEntScan really is in use
         run: python -c "from codonopt.splice import maxent_available; assert maxent_available()"

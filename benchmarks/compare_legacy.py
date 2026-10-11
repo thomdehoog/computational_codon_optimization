@@ -66,6 +66,8 @@ def main() -> int:
         help="skip the end-to-end comparison, which is the slow part",
     )
     args = parser.parse_args()
+    # The legacy functions use the module-level generator, not the local RNG.
+    random.seed(args.seed)
 
     splice_legacy = load_legacy(LEGACY_SPLICE)
     hairpin_legacy = load_legacy(LEGACY_HAIRPIN)

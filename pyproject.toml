@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codonopt"
-version = "0.2.0"
+version = "0.3.0"
 description = "Codon-optimize an open reading frame for synthesis success and expression"
 readme = "README.md"
 requires-python = ">=3.10"
